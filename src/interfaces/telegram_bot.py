@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import tempfile
+from datetime import datetime, timedelta
 
 from telegram import (
     InlineKeyboardButton,
@@ -56,6 +57,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/matrix — Eisenhower priority matrix\n"
         "/board — View kanban board\n"
         "/list — List recent items\n"
+        "/upcoming — Items by period (1-7 days)\n"
+        "/delete — Delete items\n"
         "/help — Show this help",
         parse_mode="Markdown",
     )
@@ -92,33 +95,65 @@ async def cmd_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List recent items."""
+    """List recent items in table format grouped by category."""
+    items = db.list_items(limit=30)
+    if not items:
+        await update.message.reply_text("📭 Backlog is empty.")
+        return
+
+    q_emoji = {
+        EisenhowerQuadrant.DO_FIRST: "🔴",
+        EisenhowerQuadrant.SCHEDULE: "🟡",
+        EisenhowerQuadrant.DELEGATE: "🟠",
+        EisenhowerQuadrant.ELIMINATE: "⚪",
+    }
+    s_emoji = {
+        KanbanState.BACKLOG: "📥",
+        KanbanState.TODO: "📋",
+        KanbanState.IN_PROGRESS: "🔄",
+        KanbanState.DONE: "✅",
+        KanbanState.ARCHIVED: "📦",
+    }
+
+    # Group by category
+    grouped: dict[str, list] = {}
+    for item in items:
+        cat = item.ai_suggested_category or "Uncategorized"
+        grouped.setdefault(cat, []).append(item)
+
+    lines = ["📋 *Items* (" + str(len(items)) + ")\n"]
+    for cat, cat_items in grouped.items():
+        lines.append(f"━━━ *{cat}* ━━━")
+        for item in cat_items:
+            prio = q_emoji.get(item.quadrant, "❓") if item.quadrant else "❓"
+            state = s_emoji.get(item.kanban_state, "")
+            due = ""
+            if item.deadline:
+                due = f" 📅{item.deadline.strftime('%d.%m')}"
+            title = item.title[:40]
+            lines.append(f"{prio} {state} {title}{due}")
+        lines.append("")
+
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:4000] + "\n... (truncated)"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show items list with delete buttons."""
     items = db.list_items(limit=10)
     if not items:
         await update.message.reply_text("📭 Backlog is empty.")
         return
-    lines = ["📋 *Recent Items:*\n"]
-    for i, item in enumerate(items, 1):
-        domain = f" `{item.domain.value}`" if item.domain else ""
-        quadrant_emoji = {
-            EisenhowerQuadrant.DO_FIRST: "🔴",
-            EisenhowerQuadrant.SCHEDULE: "🟡",
-            EisenhowerQuadrant.DELEGATE: "🟠",
-            EisenhowerQuadrant.ELIMINATE: "⚪",
-        }
-        prio = quadrant_emoji.get(item.quadrant, "❓") if item.quadrant else "❓"
-        state_emoji = {
-            KanbanState.BACKLOG: "📥",
-            KanbanState.TODO: "📋",
-            KanbanState.IN_PROGRESS: "🔄",
-            KanbanState.DONE: "✅",
-            KanbanState.ARCHIVED: "📦",
-        }
-        state = state_emoji.get(item.kanban_state, "")
-        lines.append(f"{i}. {prio} {state} *{item.title}*{domain}")
-        if item.ai_summary:
-            lines.append(f"   _{item.ai_summary}_")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("🗑 Tap an item to delete:")
+    for item in items:
+        keyboard = [[InlineKeyboardButton("🗑 Delete", callback_data=f"delete:{item.id}")]]
+        await update.message.reply_text(
+            f"*{item.title}*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
 
 async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,15 +195,51 @@ async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show items for a selected period with sorting options."""
+    days = 1
+    sort_by = "priority"
+    await update.message.reply_text(
+        _format_upcoming_items(days, sort_by),
+        parse_mode="Markdown",
+        reply_markup=_get_upcoming_keyboard(days, sort_by),
+    )
+
+
 # --- Message Handlers ---
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages — URLs and plain text."""
     text = update.message.text.strip()
-    await update.message.reply_text("⏳ Processing...")
+
+    # Handle /cancel
+    if text.lower() == "/cancel":
+        context.user_data.pop("editing", None)
+        await update.message.reply_text("Cancelled.")
+        return
+
+    # Handle edit mode — user is sending new title
+    editing_id = context.user_data.pop("editing", None)
+    if editing_id:
+        item = db.get_item(editing_id)
+        if item:
+            item.title = text
+            db.update_item(item)
+            keyboard = _get_item_actions_keyboard(item.id)
+            await update.message.reply_text(
+                _format_item_confirmation(item),
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+        else:
+            await update.message.reply_text("❌ Item not found.")
+        return
+
+    status_msg = await update.message.reply_text("⏳ Processing...")
 
     try:
         items = await process_input(text=text, db=db)
+        await status_msg.delete()
         for item in items:
             db.add_item(item)
             response = _format_item_confirmation(item)
@@ -180,12 +251,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Processing failed: {e}")
-        await update.message.reply_text(f"❌ Error: {e}")
+        context.user_data["retry"] = {"type": "text", "text": text}
+        keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data="retry")]]
+        await update.message.reply_text(
+            f"❌ Error: {e}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle voice messages — transcribe and extract tasks."""
-    await update.message.reply_text("🎤 Transcribing voice message...")
+    status_msg = await update.message.reply_text("🎤 Transcribing voice message...")
 
     try:
         voice = await update.message.voice.get_file()
@@ -195,6 +271,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         items = await process_input(audio_path=temp_path, db=db)
         os.unlink(temp_path)
+        await status_msg.delete()
 
         for item in items:
             db.add_item(item)
@@ -207,12 +284,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Voice processing failed: {e}")
-        await update.message.reply_text(f"❌ Error processing voice: {e}")
+        # Keep temp file for retry
+        context.user_data["retry"] = {"type": "voice", "path": temp_path}
+        keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data="retry")]]
+        await update.message.reply_text(
+            f"❌ Error processing voice: {e}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo messages — OCR and interpret."""
-    await update.message.reply_text("📸 Analyzing screenshot...")
+    status_msg = await update.message.reply_text("📸 Analyzing screenshot...")
 
     try:
         photo = await update.message.photo[-1].get_file()
@@ -222,6 +305,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         items = await process_input(image_path=temp_path, db=db)
         os.unlink(temp_path)
+        await status_msg.delete()
 
         for item in items:
             db.add_item(item)
@@ -234,7 +318,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Photo processing failed: {e}")
-        await update.message.reply_text(f"❌ Error processing screenshot: {e}")
+        # Keep temp file for retry
+        context.user_data["retry"] = {"type": "photo", "path": temp_path}
+        keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data="retry")]]
+        await update.message.reply_text(
+            f"❌ Error processing screenshot: {e}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
 
 # --- Callback Handlers ---
@@ -253,8 +343,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             item.domain = Domain(domain)
             db.update_item(item)
             await query.edit_message_text(
-                f"✅ Domain set to *{domain}*\n\n" + _format_item_confirmation(item),
+                _format_item_confirmation(item),
                 parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
             )
 
     elif data.startswith("quadrant:"):
@@ -265,8 +356,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             item.quadrant = EisenhowerQuadrant(quadrant)
             db.update_item(item)
             await query.edit_message_text(
-                f"✅ Priority set to *{quadrant}*\n\n" + _format_item_confirmation(item),
+                _format_item_confirmation(item),
                 parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
             )
 
     elif data.startswith("state:"):
@@ -277,8 +369,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             item.kanban_state = KanbanState(state)
             db.update_item(item)
             await query.edit_message_text(
-                f"✅ Status → *{state}*\n\n" + _format_item_confirmation(item),
+                _format_item_confirmation(item),
                 parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
             )
 
     elif data.startswith("setdomain:"):
@@ -326,12 +419,144 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Choose status:", reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
+    elif data.startswith("delete:"):
+        item_id = data.split(":")[1]
+        item = db.get_item(item_id)
+        title = item.title if item else "item"
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Yes, delete", callback_data=f"confirm_delete:{item_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_delete:{item_id}"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"🗑 Delete *{title}*?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data.startswith("confirm_delete:"):
+        item_id = data.split(":")[1]
+        item = db.get_item(item_id)
+        title = item.title if item else "item"
+        db.delete_item(item_id)
+        await query.edit_message_text(f"🗑 *{title}* deleted.", parse_mode="Markdown")
+
+    elif data.startswith("cancel_delete:"):
+        item_id = data.split(":")[1]
+        item = db.get_item(item_id)
+        if item:
+            await query.edit_message_text(
+                _format_item_confirmation(item),
+                parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
+            )
+        else:
+            await query.edit_message_text("Cancelled.")
+
+    elif data.startswith("edit:"):
+        item_id = data.split(":")[1]
+        context.user_data["editing"] = item_id
+        item = db.get_item(item_id)
+        title = item.title if item else ""
+        await query.edit_message_text(
+            f"✏️ Send new title for:\n_{title}_\n\nOr /cancel",
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("setdue:"):
+        item_id = data.split(":")[1]
+        today = datetime.now()
+        keyboard = [
+            [
+                InlineKeyboardButton("Today", callback_data=f"due:{item_id}:0"),
+                InlineKeyboardButton("Tomorrow", callback_data=f"due:{item_id}:1"),
+                InlineKeyboardButton("+3d", callback_data=f"due:{item_id}:3"),
+            ],
+            [
+                InlineKeyboardButton("+1w", callback_data=f"due:{item_id}:7"),
+                InlineKeyboardButton("+2w", callback_data=f"due:{item_id}:14"),
+                InlineKeyboardButton("+1m", callback_data=f"due:{item_id}:30"),
+            ],
+            [
+                InlineKeyboardButton("❌ No due date", callback_data=f"due:{item_id}:none"),
+            ],
+        ]
+        await query.edit_message_text(
+            "📅 Set due date:", reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data.startswith("due:"):
+        parts = data.split(":")
+        item_id, offset = parts[1], parts[2]
+        item = db.get_item(item_id)
+        if item:
+            if offset == "none":
+                item.deadline = None
+            else:
+                item.deadline = datetime.now() + timedelta(days=int(offset))
+            db.update_item(item)
+            await query.edit_message_text(
+                _format_item_confirmation(item),
+                parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
+            )
+
+    elif data == "retry":
+        retry_info = context.user_data.get("retry")
+        if not retry_info:
+            await query.edit_message_text("Nothing to retry.")
+            return
+        await query.edit_message_text("🔄 Retrying...")
+        try:
+            if retry_info["type"] == "text":
+                items = await process_input(text=retry_info["text"], db=db)
+            elif retry_info["type"] == "voice":
+                items = await process_input(audio_path=retry_info["path"], db=db)
+            elif retry_info["type"] == "photo":
+                items = await process_input(image_path=retry_info["path"], db=db)
+            else:
+                items = []
+            for item in items:
+                db.add_item(item)
+                response = _format_item_confirmation(item)
+                keyboard = _get_item_actions_keyboard(item.id)
+                await query.message.reply_text(
+                    response,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
+            # Clean up temp files on success
+            if retry_info["type"] in ("voice", "photo"):
+                try:
+                    os.unlink(retry_info["path"])
+                except (FileNotFoundError, OSError):
+                    pass
+            context.user_data.pop("retry", None)
+        except Exception as e:
+            logger.error(f"Retry failed: {e}")
+            keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data="retry")]]
+            await query.edit_message_text(
+                f"❌ Retry failed: {e}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+    elif data.startswith("upcoming:"):
+        parts = data.split(":")
+        days = int(parts[1])
+        sort_by = parts[2] if len(parts) > 2 else "date"
+        await query.edit_message_text(
+            _format_upcoming_items(days, sort_by),
+            parse_mode="Markdown",
+            reply_markup=_get_upcoming_keyboard(days, sort_by),
+        )
+
 
 # --- Helpers ---
 
 def _format_item_confirmation(item: Item) -> str:
     """Format item as a Telegram-friendly confirmation message."""
-    lines = [f"✅ *Saved:* {item.title}"]
+    lines = [f"✅ *{item.title}*"]
     if item.url:
         lines.append(f"🔗 {item.url}")
     if item.domain:
@@ -345,6 +570,16 @@ def _format_item_confirmation(item: Item) -> str:
             "eliminate": "⚪ Eliminate",
         }
         lines.append(f"Priority: {q_labels.get(item.quadrant.value, item.quadrant.value)}")
+    state_labels = {
+        "backlog": "📥 Backlog",
+        "todo": "📋 To Do",
+        "in_progress": "🔄 In Progress",
+        "done": "✅ Done",
+        "archived": "📦 Archived",
+    }
+    lines.append(f"Status: {state_labels.get(item.kanban_state.value, item.kanban_state.value)}")
+    if item.deadline:
+        lines.append(f"📅 Due: {item.deadline.strftime('%d.%m.%Y')}")
     if item.ai_summary:
         lines.append(f"\n_{item.ai_summary}_")
     if item.ai_suggested_tags:
@@ -359,8 +594,83 @@ def _get_item_actions_keyboard(item_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🏷 Domain", callback_data=f"setdomain:{item_id}"),
             InlineKeyboardButton("⚡ Priority", callback_data=f"setprio:{item_id}"),
             InlineKeyboardButton("📊 Status", callback_data=f"setstate:{item_id}"),
-        ]
+        ],
+        [
+            InlineKeyboardButton("✏️ Edit", callback_data=f"edit:{item_id}"),
+            InlineKeyboardButton("📅 Due", callback_data=f"setdue:{item_id}"),
+            InlineKeyboardButton("🗑 Delete", callback_data=f"delete:{item_id}"),
+        ],
     ])
+
+
+def _get_upcoming_keyboard(active_days: int, active_sort: str) -> InlineKeyboardMarkup:
+    """Create keyboard for period selection and sorting."""
+    day_options = [1, 2, 3, 7]
+    day_buttons = []
+    for d in day_options:
+        label = "Today" if d == 1 else f"{d}d" if d < 7 else "Week"
+        if d == active_days:
+            label = f"• {label} •"
+        day_buttons.append(InlineKeyboardButton(label, callback_data=f"upcoming:{d}:{active_sort}"))
+
+    sort_buttons = []
+    for s, label in [("priority", "⚡ Prio"), ("date", "📅 Date"), ("domain", "🏷 Domain")]:
+        lbl = f"• {label} •" if s == active_sort else label
+        sort_buttons.append(InlineKeyboardButton(lbl, callback_data=f"upcoming:{active_days}:{s}"))
+
+    return InlineKeyboardMarkup([day_buttons, sort_buttons])
+
+
+def _format_upcoming_items(days: int, sort_by: str) -> str:
+    """Format items list filtered by period with sorting."""
+    cutoff = datetime.now() - timedelta(days=days)
+    items = db.list_items(limit=100)
+    active = [
+        i for i in items
+        if i.kanban_state not in (KanbanState.DONE, KanbanState.ARCHIVED)
+        and i.created_at >= cutoff
+    ]
+
+    quadrant_order = {
+        EisenhowerQuadrant.DO_FIRST: 0,
+        EisenhowerQuadrant.SCHEDULE: 1,
+        EisenhowerQuadrant.DELEGATE: 2,
+        EisenhowerQuadrant.ELIMINATE: 3,
+    }
+    if sort_by == "priority":
+        active.sort(key=lambda i: quadrant_order.get(i.quadrant, 99))
+    elif sort_by == "date":
+        active.sort(key=lambda i: i.created_at, reverse=True)
+    elif sort_by == "domain":
+        active.sort(key=lambda i: (i.domain.value if i.domain else "zzz", i.created_at))
+
+    period_label = "Today" if days == 1 else f"Last {days} days" if days < 7 else "This week"
+    lines = [f"📅 *{period_label}* — {len(active)} items\n"]
+
+    if not active:
+        lines.append("_No active items for this period._")
+        return "\n".join(lines)
+
+    q_emoji = {
+        EisenhowerQuadrant.DO_FIRST: "🔴",
+        EisenhowerQuadrant.SCHEDULE: "🟡",
+        EisenhowerQuadrant.DELEGATE: "🟠",
+        EisenhowerQuadrant.ELIMINATE: "⚪",
+    }
+    s_emoji = {
+        KanbanState.BACKLOG: "📥",
+        KanbanState.TODO: "📋",
+        KanbanState.IN_PROGRESS: "🔄",
+    }
+
+    for i, item in enumerate(active, 1):
+        prio = q_emoji.get(item.quadrant, "❓")
+        state = s_emoji.get(item.kanban_state, "")
+        domain = f" `{item.domain.value}`" if item.domain else ""
+        time_str = item.created_at.strftime("%H:%M")
+        lines.append(f"{i}. {prio} {state} *{item.title}*{domain}  _{time_str}_")
+
+    return "\n".join(lines)
 
 
 # --- Main ---
@@ -377,12 +687,28 @@ def run_bot():
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Register command menu in Telegram
+    async def post_init(application):
+        await application.bot.set_my_commands([
+            ("plan", "Today's daily plan"),
+            ("matrix", "Eisenhower priority matrix"),
+            ("board", "View kanban board"),
+            ("list", "List recent items"),
+            ("upcoming", "Upcoming items by period"),
+            ("delete", "Delete an item by ID"),
+            ("help", "Show this help"),
+        ])
+
+    app.post_init = post_init
+
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("matrix", cmd_matrix))
     app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("delete", cmd_delete))
+    app.add_handler(CommandHandler("upcoming", cmd_upcoming))
     app.add_handler(CommandHandler("board", cmd_board))
 
     # Messages

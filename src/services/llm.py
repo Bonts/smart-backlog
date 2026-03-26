@@ -2,14 +2,35 @@
 
 from __future__ import annotations
 
-from langchain_openai import ChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from ..config import OPENAI_API_KEY, OPENAI_MODEL
+from ..config import (
+    LLM_PROVIDER,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_API_VERSION,
+    AZURE_OPENAI_ENDPOINT,
+    AZURE_OPENAI_API_DEPLOYMENT,
+    AZURE_OPENAI_API_DEPLOYMENT_FAST,
+)
 
 
-def get_llm() -> ChatOpenAI:
-    """Get configured LLM instance."""
+def get_llm(profile: str = "fast") -> ChatOpenAI | AzureChatOpenAI:
+    """Get configured LLM instance. Supports azure and openai providers."""
+    if LLM_PROVIDER == "azure" and AZURE_OPENAI_API_KEY:
+        deployment = AZURE_OPENAI_API_DEPLOYMENT_FAST or AZURE_OPENAI_API_DEPLOYMENT
+        if profile == "smart":
+            deployment = AZURE_OPENAI_API_DEPLOYMENT
+        return AzureChatOpenAI(
+            azure_deployment=deployment,
+            api_version=AZURE_OPENAI_API_VERSION,
+            api_key=AZURE_OPENAI_API_KEY,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            temperature=0.3,
+            max_tokens=2000,
+        )
     return ChatOpenAI(
         model=OPENAI_MODEL,
         api_key=OPENAI_API_KEY,
@@ -56,9 +77,9 @@ Respond in JSON:
 ])
 
 VOICE_TO_TASKS_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a task extraction assistant. Given a voice message transcription:
+    ("system", """You are a task extraction assistant. Given a voice message transcription (in Russian or English):
 1. Identify actionable tasks mentioned
-2. Reformulate each as a clear, concise task title
+2. Reformulate each as a clear, concise task title in the SAME language as the original transcription
 3. Extract key context for each task
 
 Respond in JSON:

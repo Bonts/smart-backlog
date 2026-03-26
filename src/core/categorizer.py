@@ -14,11 +14,12 @@ logger = logging.getLogger(__name__)
 
 async def categorize_item(item: Item, db: Database) -> Item:
     """Use AI to categorize, tag, and prioritize an item. Skips gracefully if no API key."""
-    from ..config import OPENAI_API_KEY
-    if not OPENAI_API_KEY:
+    from ..config import OPENAI_API_KEY, AZURE_OPENAI_API_KEY
+    if not OPENAI_API_KEY and not AZURE_OPENAI_API_KEY:
         return item
 
     try:
+        logger.info(f"Categorizing item: {item.title[:80]}")
         llm = get_llm()
         categories = [c.name for c in db.list_categories()]
         tags = [t.name for t in db.list_tags()]

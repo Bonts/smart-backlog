@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from ..core.models import Item, ItemType
 from ..services.web_scraper import extract_url_title
 from ..storage.database import Database
 from .categorizer import categorize_item
 
+logger = logging.getLogger(__name__)
 
 URL_PATTERN = re.compile(r"https?://\S+")
 
@@ -75,12 +77,25 @@ async def _process_audio(audio_path: str) -> list[Item]:
     from ..services.transcriber import transcribe_audio
     from ..services.llm import VOICE_TO_TASKS_PROMPT, get_llm
 
+    logger.info("Step 1/3: Transcribing audio...")
     transcription = await transcribe_audio(audio_path)
+    logger.info(f"Transcription result ({len(transcription)} chars): {transcription[:200]}")
+
+    if not transcription or not transcription.strip():
+        logger.warning("Empty transcription, creating fallback item")
+        return [Item(
+            title="(empty voice message)",
+            content="",
+            raw_input="[empty transcription]",
+            item_type=ItemType.VOICE,
+        )]
 
     # Extract tasks from transcription
+    logger.info("Step 2/3: Extracting tasks from transcription...")
     llm = get_llm()
     chain = VOICE_TO_TASKS_PROMPT | llm
     response = await chain.ainvoke({"transcription": transcription})
+    logger.info(f"Task extraction response: {response.content[:500]}")
 
     items = []
     try:
@@ -93,8 +108,12 @@ async def _process_audio(audio_path: str) -> list[Item]:
                 item_type=ItemType.VOICE,
             )
             items.append(item)
-    except (json.JSONDecodeError, AttributeError):
-        # Fallback: create single item from transcription
+    except (json.JSONDecodeError, AttributeError) as e:
+        logger.warning(f"JSON parse failed: {e}")
+
+    # Fallback: if no tasks extracted, save whole transcription as single item
+    if not items:
+        logger.info("No tasks extracted, saving transcription as single item")
         items.append(Item(
             title=transcription[:100],
             content=transcription,
@@ -102,4 +121,5 @@ async def _process_audio(audio_path: str) -> list[Item]:
             item_type=ItemType.VOICE,
         ))
 
+    logger.info(f"Extracted {len(items)} item(s) from voice")
     return items
