@@ -1,0 +1,31 @@
+[Unit]
+Description=Smart Backlog Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smart-backlog
+Group=smart-backlog
+WorkingDirectory=/opt/smart-backlog
+ExecStart=/opt/smart-backlog/.venv/bin/python run_bot.py
+Restart=on-failure
+RestartSec=10
+
+# Environment
+EnvironmentFile=/opt/smart-backlog/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/smart-backlog/data
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smart-backlog
+
+[Install]
+WantedBy=multi-user.target

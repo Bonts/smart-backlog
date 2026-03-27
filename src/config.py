@@ -30,6 +30,11 @@ AZURE_OPENAI_API_DEPLOYMENT_FAST = os.getenv("AZURE_OPENAI_API_DEPLOYMENT_FAST",
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+ALLOWED_TELEGRAM_USERS = [
+    int(uid.strip())
+    for uid in os.getenv("ALLOWED_TELEGRAM_USERS", "").split(",")
+    if uid.strip().isdigit()
+]
 
 # Transcription
 TRANSCRIPTION_ENGINE = os.getenv("TRANSCRIPTION_ENGINE", "whisper")

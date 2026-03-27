@@ -23,7 +23,7 @@ from telegram.ext import (
     filters,
 )
 
-from ..config import TELEGRAM_BOT_TOKEN
+from ..config import ALLOWED_TELEGRAM_USERS, TELEGRAM_BOT_TOKEN
 from ..core.models import (
     Domain,
     EisenhowerQuadrant,
@@ -42,6 +42,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 db = Database()
+
+
+def _is_allowed(user_id: int) -> bool:
+    """Check if user is allowed (empty list = allow all)."""
+    return not ALLOWED_TELEGRAM_USERS or user_id in ALLOWED_TELEGRAM_USERS
+
+
+async def _check_access(update: Update) -> bool:
+    """Return True if user has access, send rejection otherwise."""
+    user = update.effective_user
+    if user and _is_allowed(user.id):
+        return True
+    if update.message:
+        await update.message.reply_text("⛔ Доступ запрещён.")
+    elif update.callback_query:
+        await update.callback_query.answer("⛔ Доступ запрещён.", show_alert=True)
+    return False
 
 
 # --- Command Handlers ---
@@ -961,22 +978,30 @@ def run_bot():
 
     app.post_init = post_init
 
+    # Access control: allow only listed users (if configured)
+    user_filter = filters.ALL
+    if ALLOWED_TELEGRAM_USERS:
+        user_filter = filters.User(user_id=ALLOWED_TELEGRAM_USERS)
+        print(f"🔒 Access restricted to user IDs: {ALLOWED_TELEGRAM_USERS}")
+    else:
+        print("⚠️  No ALLOWED_TELEGRAM_USERS set — bot is open to everyone!")
+
     # Commands
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("plan", cmd_plan))
-    app.add_handler(CommandHandler("matrix", cmd_matrix))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("delete", cmd_delete))
-    app.add_handler(CommandHandler("cleanup", cmd_cleanup))
-    app.add_handler(CommandHandler("upcoming", cmd_upcoming))
-    app.add_handler(CommandHandler("export", cmd_export))
-    app.add_handler(CommandHandler("board", cmd_board))
+    app.add_handler(CommandHandler("start", cmd_start, filters=user_filter))
+    app.add_handler(CommandHandler("help", cmd_help, filters=user_filter))
+    app.add_handler(CommandHandler("plan", cmd_plan, filters=user_filter))
+    app.add_handler(CommandHandler("matrix", cmd_matrix, filters=user_filter))
+    app.add_handler(CommandHandler("list", cmd_list, filters=user_filter))
+    app.add_handler(CommandHandler("delete", cmd_delete, filters=user_filter))
+    app.add_handler(CommandHandler("cleanup", cmd_cleanup, filters=user_filter))
+    app.add_handler(CommandHandler("upcoming", cmd_upcoming, filters=user_filter))
+    app.add_handler(CommandHandler("export", cmd_export, filters=user_filter))
+    app.add_handler(CommandHandler("board", cmd_board, filters=user_filter))
 
     # Messages
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(user_filter & filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(user_filter & filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(user_filter & filters.PHOTO, handle_photo))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(handle_callback))

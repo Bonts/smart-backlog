@@ -5,11 +5,12 @@ AI-powered knowledge hub & backlog manager with smart categorization, Eisenhower
 ## What it does
 
 - **Capture anything**: URLs, screenshots (OCR), voice messages (transcription), text notes
-- **AI categorization**: automatic tagging, folder routing, priority suggestion
+- **AI categorization**: automatic tagging, kind detection (task/note/idea), priority suggestion
 - **Eisenhower matrix**: urgent/important prioritization + domain separation (work/personal/study)
 - **Kanban boards**: flexible board configuration per task type
 - **Daily planning**: auto-generated daily plans with reminders
-- **Learning support**: auto-generate study plans and find related resources
+- **PDF export**: beautiful table views of backlog, matrix, filtered by kind
+- **Bulk management**: multi-select delete, cleanup (archive/delete done items)
 
 ## Interfaces
 
@@ -31,7 +32,8 @@ smart-backlog/
 │   │   └── processor.py     # Input processing pipeline
 │   ├── storage/             # Data persistence
 │   │   ├── database.py      # SQLite operations
-│   │   └── markdown.py      # Markdown export for mobile viewing
+│   │   ├── markdown.py      # Markdown export for mobile viewing
+│   │   └── pdf_export.py    # PDF table & matrix export
 │   ├── interfaces/          # User-facing interfaces
 │   │   ├── telegram_bot.py  # Telegram bot
 │   │   └── mcp_tool.py      # MCP server tool
@@ -53,10 +55,11 @@ smart-backlog/
 
 - **Python 3.11+**
 - **SQLite** — local database
-- **LangChain + LLM** — AI categorization, summarization, planning
+- **LangChain + Azure OpenAI** — AI categorization, summarization, planning
 - **python-telegram-bot** — Telegram interface
-- **Whisper / Azure Speech** — voice transcription
-- **Tesseract / Vision API** — OCR for screenshots
+- **reportlab** — PDF export
+- **Azure OpenAI Vision** — OCR for screenshots
+- **Azure OpenAI Audio** — voice transcription
 
 ## Quick Start
 

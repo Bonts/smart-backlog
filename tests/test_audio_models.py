@@ -1,4 +1,4 @@
-"""Test audio transcription via chat completions API on EPAM AI Proxy."""
+"""Test audio transcription via chat completions API on Azure OpenAI."""
 import sys, os, base64
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

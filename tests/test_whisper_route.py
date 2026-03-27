@@ -1,4 +1,4 @@
-"""Test whisper transcription routes on EPAM AI Proxy."""
+"""Test whisper transcription routes on Azure OpenAI."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+data/*.db
+.git/
+.gitignore
+tests/
+docs/
+deploy/
+*.md
+.env.example
