@@ -40,17 +40,19 @@ def get_llm(profile: str = "fast") -> ChatOpenAI | AzureChatOpenAI:
 
 CATEGORIZE_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a smart backlog assistant. Analyze the incoming item and suggest:
-1. A category (from existing categories or suggest a new one)
-2. Tags (from existing tags or suggest new ones)
-3. Eisenhower quadrant (do_first / schedule / delegate / eliminate)
-4. Domain (work / personal / study)
-5. A brief summary (1-2 sentences)
+1. Kind: "task" (actionable, has a clear action), "note" (information/reference to save), or "idea" (creative thought for later)
+2. A category (from existing categories or suggest a new one)
+3. Tags (from existing tags or suggest new ones)
+4. Eisenhower quadrant (do_first / schedule / delegate / eliminate) — only for tasks
+5. Domain (work / personal / study)
+6. A brief summary (1-2 sentences)
 
 Existing categories: {categories}
 Existing tags: {tags}
 
 Respond in JSON format:
 {{
+    "kind": "task",
     "category": "suggested category name",
     "tags": ["tag1", "tag2"],
     "quadrant": "schedule",

@@ -7,7 +7,7 @@ import logging
 
 from ..services.llm import CATEGORIZE_PROMPT, get_llm
 from ..storage.database import Database
-from .models import EisenhowerQuadrant, Domain, Item
+from .models import EisenhowerQuadrant, Domain, Item, ItemKind
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,10 @@ async def categorize_item(item: Item, db: Database) -> Item:
         item.ai_suggested_tags = result.get("tags", [])
         item.ai_summary = result.get("summary")
 
+        kind = result.get("kind")
+        if kind and kind in [k.value for k in ItemKind]:
+            item.kind = ItemKind(kind)
+
         quadrant = result.get("quadrant")
         if quadrant and quadrant in [q.value for q in EisenhowerQuadrant]:
             item.ai_suggested_quadrant = EisenhowerQuadrant(quadrant)
@@ -51,7 +55,5 @@ async def categorize_item(item: Item, db: Database) -> Item:
 
     except Exception as e:
         logger.warning(f"AI categorization failed (item will be saved without AI metadata): {e}")
-
-    return item
 
     return item

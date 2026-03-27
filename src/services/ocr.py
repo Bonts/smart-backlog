@@ -28,6 +28,11 @@ async def _extract_with_vision(image_path: str) -> str:
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
 
+    # Detect media type from extension
+    ext = image_path.rsplit(".", 1)[-1].lower()
+    media_types = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
+    media_type = media_types.get(ext, "image/jpeg")
+
     messages = [
         {
             "role": "user",
@@ -39,7 +44,7 @@ async def _extract_with_vision(image_path: str) -> str:
                 },
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{image_data}"},
+                    "image_url": {"url": f"data:{media_type};base64,{image_data}"},
                 },
             ],
         }

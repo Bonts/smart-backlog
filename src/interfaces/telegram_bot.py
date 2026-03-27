@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import tempfile
@@ -27,6 +28,7 @@ from ..core.models import (
     Domain,
     EisenhowerQuadrant,
     Item,
+    ItemKind,
     KanbanState,
 )
 from ..core.planner import generate_daily_plan
@@ -34,6 +36,7 @@ from ..core.prioritizer import get_eisenhower_matrix, matrix_to_markdown
 from ..core.processor import process_input
 from ..storage.database import Database
 from ..storage.markdown import daily_plan_to_markdown, item_to_markdown
+from ..storage.pdf_export import generate_backlog_pdf, generate_matrix_pdf
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,6 +61,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/board — View kanban board\n"
         "/list — List recent items\n"
         "/upcoming — Items by period (1-7 days)\n"
+        "/export — Export backlog as PDF\n"
+        "/cleanup — Bulk archive/delete items\n"
         "/delete — Delete items\n"
         "/help — Show this help",
         parse_mode="Markdown",
@@ -141,19 +146,59 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show items list with delete buttons."""
-    items = db.list_items(limit=10)
+    """Show items with toggle selection for batch delete."""
+    items = db.list_items(limit=30)
     if not items:
         await update.message.reply_text("📭 Backlog is empty.")
         return
-    await update.message.reply_text("🗑 Tap an item to delete:")
-    for item in items:
-        keyboard = [[InlineKeyboardButton("🗑 Delete", callback_data=f"delete:{item.id}")]]
-        await update.message.reply_text(
-            f"*{item.title}*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+
+    context.user_data["select_delete"] = set()
+    context.user_data["delete_items"] = [i.id for i in items]
+
+    keyboard = _build_select_delete_keyboard(items, set())
+    await update.message.reply_text(
+        f"🗑 *Select items to delete* ({len(items)})\nTap to toggle ☐/☑, then press Delete Selected.",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bulk cleanup: archive/delete done items or purge all."""
+    counts = db.count_items_by_state()
+    total = sum(counts.values())
+    done = counts.get("done", 0)
+    archived = counts.get("archived", 0)
+
+    text = (
+        f"🧹 *Cleanup*\n\n"
+        f"Total items: {total}\n"
+        f"✅ Done: {done}\n"
+        f"📦 Archived: {archived}\n"
+    )
+    keyboard = []
+    if done > 0:
+        keyboard.append([
+            InlineKeyboardButton(f"📦 Archive done ({done})", callback_data="cleanup:archive_done"),
+            InlineKeyboardButton(f"🗑 Delete done ({done})", callback_data="cleanup:delete_done"),
+        ])
+    if archived > 0:
+        keyboard.append([
+            InlineKeyboardButton(f"🗑 Delete archived ({archived})", callback_data="cleanup:delete_archived"),
+        ])
+    if total > 0:
+        keyboard.append([
+            InlineKeyboardButton(f"⚠️ Delete ALL ({total})", callback_data="cleanup:delete_all"),
+        ])
+
+    if not keyboard:
+        await update.message.reply_text("📭 Nothing to clean up.")
+        return
+
+    await update.message.reply_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,6 +248,24 @@ async def cmd_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _format_upcoming_items(days, sort_by),
         parse_mode="Markdown",
         reply_markup=_get_upcoming_keyboard(days, sort_by),
+    )
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Export backlog as PDF document."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 Full Backlog", callback_data="export:backlog"),
+            InlineKeyboardButton("📊 Matrix", callback_data="export:matrix"),
+        ],
+        [
+            InlineKeyboardButton("📌 Tasks only", callback_data="export:tasks"),
+            InlineKeyboardButton("📝 Notes only", callback_data="export:notes"),
+        ],
+    ]
+    await update.message.reply_text(
+        "📄 Choose export format:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -373,6 +436,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=_get_item_actions_keyboard(item_id),
             )
+
+    elif data.startswith("kind:"):
+        parts = data.split(":")
+        item_id, kind = parts[1], parts[2]
+        item = db.get_item(item_id)
+        if item:
+            item.kind = ItemKind(kind)
+            db.update_item(item)
+            await query.edit_message_text(
+                _format_item_confirmation(item),
+                parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
+            )
+
+    elif data.startswith("setkind:"):
+        item_id = data.split(":")[1]
+        keyboard = [
+            [
+                InlineKeyboardButton("📌 Task", callback_data=f"kind:{item_id}:task"),
+                InlineKeyboardButton("📝 Note", callback_data=f"kind:{item_id}:note"),
+                InlineKeyboardButton("💡 Idea", callback_data=f"kind:{item_id}:idea"),
+            ]
+        ]
+        await query.edit_message_text(
+            "Choose kind:", reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
     elif data.startswith("setdomain:"):
         item_id = data.split(":")[1]
@@ -551,12 +640,178 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=_get_upcoming_keyboard(days, sort_by),
         )
 
+    elif data.startswith("export:"):
+        export_type = data.split(":")[1]
+        await query.edit_message_text("⏳ Generating PDF...")
+        try:
+            if export_type == "matrix":
+                items = db.list_items(limit=200)
+                pdf_bytes = generate_matrix_pdf(items)
+                filename = "eisenhower_matrix.pdf"
+                caption = "📊 Eisenhower Matrix"
+            else:
+                if export_type == "tasks":
+                    all_items = db.list_items(limit=200)
+                    items = [i for i in all_items if i.kind.value == "task"]
+                    title = "Tasks"
+                elif export_type == "notes":
+                    all_items = db.list_items(limit=200)
+                    items = [i for i in all_items if i.kind.value in ("note", "idea")]
+                    title = "Notes & Ideas"
+                else:
+                    items = db.list_items(limit=200)
+                    title = "Smart Backlog"
+                pdf_bytes = generate_backlog_pdf(items, title)
+                filename = f"{title.lower().replace(' ', '_')}.pdf"
+                caption = f"📄 {title} ({len(items)} items)"
+
+            await query.message.reply_document(
+                document=io.BytesIO(pdf_bytes),
+                filename=filename,
+                caption=caption,
+            )
+            await query.edit_message_text(f"✅ {caption} — exported!")
+        except Exception as e:
+            logger.error(f"PDF export failed: {e}")
+            await query.edit_message_text(f"❌ Export failed: {e}")
+
+    elif data.startswith("cleanup:"):
+        action = data.split(":")[1]
+        if action == "archive_done":
+            count = db.archive_done_items()
+            await query.edit_message_text(f"📦 Archived {count} done items.")
+        elif action == "delete_done":
+            count = db.delete_items_by_state("done")
+            await query.edit_message_text(f"🗑 Deleted {count} done items.")
+        elif action == "delete_archived":
+            count = db.delete_items_by_state("archived")
+            await query.edit_message_text(f"🗑 Deleted {count} archived items.")
+        elif action == "delete_all":
+            keyboard = [[
+                InlineKeyboardButton("⚠️ YES, DELETE ALL", callback_data="cleanup:confirm_all"),
+                InlineKeyboardButton("❌ Cancel", callback_data="cleanup:cancel"),
+            ]]
+            await query.edit_message_text(
+                "⚠️ *Are you sure?* This will delete ALL items permanently!",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        elif action == "confirm_all":
+            count = db.delete_all_items()
+            await query.edit_message_text(f"🗑 Deleted ALL {count} items.")
+        elif action == "cancel":
+            await query.edit_message_text("Cancelled.")
+
+    elif data.startswith("sel:"):
+        # Toggle item selection for batch delete
+        item_id = data.split(":")[1]
+        selected = context.user_data.get("select_delete", set())
+        if item_id in selected:
+            selected.discard(item_id)
+        else:
+            selected.add(item_id)
+        context.user_data["select_delete"] = selected
+
+        item_ids = context.user_data.get("delete_items", [])
+        items = [db.get_item(iid) for iid in item_ids]
+        items = [i for i in items if i is not None]
+        keyboard = _build_select_delete_keyboard(items, selected)
+        count = len(selected)
+        await query.edit_message_text(
+            f"🗑 *Select items to delete* ({len(items)})\n"
+            f"Selected: {count}\nTap to toggle ☐/☑, then press Delete Selected.",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+
+    elif data == "sel_delete_go":
+        selected = context.user_data.get("select_delete", set())
+        if not selected:
+            await query.answer("Nothing selected!")
+            return
+        keyboard = [[
+            InlineKeyboardButton(f"⚠️ DELETE {len(selected)} items", callback_data="sel_delete_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sel_delete_cancel"),
+        ]]
+        await query.edit_message_text(
+            f"⚠️ Delete *{len(selected)}* selected items?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data == "sel_delete_confirm":
+        selected = context.user_data.pop("select_delete", set())
+        context.user_data.pop("delete_items", None)
+        count = 0
+        for item_id in selected:
+            if db.delete_item(item_id):
+                count += 1
+        await query.edit_message_text(f"🗑 Deleted {count} items.")
+
+    elif data == "sel_delete_cancel":
+        context.user_data.pop("select_delete", None)
+        context.user_data.pop("delete_items", None)
+        await query.edit_message_text("Cancelled.")
+
+    elif data == "sel_all":
+        item_ids = context.user_data.get("delete_items", [])
+        context.user_data["select_delete"] = set(item_ids)
+        items = [db.get_item(iid) for iid in item_ids]
+        items = [i for i in items if i is not None]
+        keyboard = _build_select_delete_keyboard(items, set(item_ids))
+        await query.edit_message_text(
+            f"🗑 *Select items to delete* ({len(items)})\n"
+            f"Selected: {len(items)}\nTap to toggle ☐/☑, then press Delete Selected.",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+
+    elif data == "sel_none":
+        context.user_data["select_delete"] = set()
+        item_ids = context.user_data.get("delete_items", [])
+        items = [db.get_item(iid) for iid in item_ids]
+        items = [i for i in items if i is not None]
+        keyboard = _build_select_delete_keyboard(items, set())
+        await query.edit_message_text(
+            f"🗑 *Select items to delete* ({len(items)})\n"
+            f"Selected: 0\nTap to toggle ☐/☑, then press Delete Selected.",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+
 
 # --- Helpers ---
 
+def _build_select_delete_keyboard(items: list[Item], selected: set) -> InlineKeyboardMarkup:
+    """Build inline keyboard with toggleable item selection for batch delete."""
+    kind_emoji = {"task": "📌", "note": "📝", "idea": "💡"}
+    s_emoji = {"backlog": "📥", "todo": "📋", "in_progress": "🔄", "done": "✅", "archived": "📦"}
+
+    rows = []
+    for item in items:
+        check = "☑" if item.id in selected else "☐"
+        ke = kind_emoji.get(item.kind.value, "")
+        se = s_emoji.get(item.kanban_state.value, "")
+        label = f"{check} {ke}{se} {item.title[:35]}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"sel:{item.id}")])
+
+    # Action row
+    count = len(selected)
+    rows.append([
+        InlineKeyboardButton("Select All", callback_data="sel_all"),
+        InlineKeyboardButton("Deselect All", callback_data="sel_none"),
+    ])
+    rows.append([
+        InlineKeyboardButton(f"🗑 Delete Selected ({count})", callback_data="sel_delete_go"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 def _format_item_confirmation(item: Item) -> str:
     """Format item as a Telegram-friendly confirmation message."""
-    lines = [f"✅ *{item.title}*"]
+    kind_labels = {"task": "📌 Task", "note": "📝 Note", "idea": "💡 Idea"}
+    kind_label = kind_labels.get(item.kind.value, "📌 Task")
+    lines = [f"{kind_label} — *{item.title}*"]
     if item.url:
         lines.append(f"🔗 {item.url}")
     if item.domain:
@@ -598,7 +853,10 @@ def _get_item_actions_keyboard(item_id: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("✏️ Edit", callback_data=f"edit:{item_id}"),
             InlineKeyboardButton("📅 Due", callback_data=f"setdue:{item_id}"),
-            InlineKeyboardButton("🗑 Delete", callback_data=f"delete:{item_id}"),
+            InlineKeyboardButton("� Kind", callback_data=f"setkind:{item_id}"),
+        ],
+        [
+            InlineKeyboardButton("�🗑 Delete", callback_data=f"delete:{item_id}"),
         ],
     ])
 
@@ -695,6 +953,8 @@ def run_bot():
             ("board", "View kanban board"),
             ("list", "List recent items"),
             ("upcoming", "Upcoming items by period"),
+            ("export", "Export backlog as PDF"),
+            ("cleanup", "Bulk archive/delete items"),
             ("delete", "Delete an item by ID"),
             ("help", "Show this help"),
         ])
@@ -708,7 +968,9 @@ def run_bot():
     app.add_handler(CommandHandler("matrix", cmd_matrix))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("delete", cmd_delete))
+    app.add_handler(CommandHandler("cleanup", cmd_cleanup))
     app.add_handler(CommandHandler("upcoming", cmd_upcoming))
+    app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("board", cmd_board))
 
     # Messages

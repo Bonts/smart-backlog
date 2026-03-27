@@ -40,6 +40,12 @@ class KanbanState(str, Enum):
     ARCHIVED = "archived"
 
 
+class ItemKind(str, Enum):
+    TASK = "task"           # Actionable task
+    NOTE = "note"           # Information / reference
+    IDEA = "idea"           # Idea for later
+
+
 # --- Models ---
 
 class Tag(BaseModel):
@@ -64,6 +70,7 @@ class Item(BaseModel):
     content: str = ""
     raw_input: str = ""  # Original input before processing
     item_type: ItemType = ItemType.NOTE
+    kind: ItemKind = ItemKind.TASK  # task / note / idea
     url: Optional[str] = None
 
     # Organization

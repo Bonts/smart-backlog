@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS items (
     content TEXT DEFAULT '',
     raw_input TEXT DEFAULT '',
     item_type TEXT DEFAULT 'note',
+    kind TEXT DEFAULT 'task',
     url TEXT,
     category_id TEXT,
     tags TEXT DEFAULT '[]',
@@ -114,6 +115,10 @@ class Database:
         """Initialize database schema and seed system tags."""
         with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            # Migration: add kind column if missing
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(items)").fetchall()]
+            if "kind" not in cols:
+                conn.execute("ALTER TABLE items ADD COLUMN kind TEXT DEFAULT 'task'")
             # Seed system tags
             for tag_data in SYSTEM_TAGS:
                 conn.execute(
@@ -128,10 +133,16 @@ class Database:
     def add_item(self, item: Item) -> Item:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO items
+                   (id, title, content, raw_input, item_type, kind, url,
+                    category_id, tags, domain, quadrant, priority_score,
+                    deadline, kanban_state, board_id, ai_summary,
+                    ai_suggested_category, ai_suggested_tags,
+                    ai_suggested_quadrant, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     item.id, item.title, item.content, item.raw_input,
-                    item.item_type.value, item.url, item.category_id,
+                    item.item_type.value, item.kind.value, item.url, item.category_id,
                     json.dumps(item.tags), item.domain.value if item.domain else None,
                     item.quadrant.value if item.quadrant else None,
                     item.priority_score, item.deadline.isoformat() if item.deadline else None,
@@ -198,7 +209,7 @@ class Database:
                    domain=?, quadrant=?, priority_score=?, deadline=?,
                    kanban_state=?, board_id=?, ai_summary=?,
                    ai_suggested_category=?, ai_suggested_tags=?,
-                   ai_suggested_quadrant=?, updated_at=?
+                   ai_suggested_quadrant=?, kind=?, updated_at=?
                    WHERE id=?""",
                 (
                     item.title, item.content, item.category_id,
@@ -211,7 +222,7 @@ class Database:
                     item.ai_summary, item.ai_suggested_category,
                     json.dumps(item.ai_suggested_tags),
                     item.ai_suggested_quadrant.value if item.ai_suggested_quadrant else None,
-                    item.updated_at.isoformat(), item.id,
+                    item.kind.value, item.updated_at.isoformat(), item.id,
                 ),
             )
             conn.commit()
@@ -222,6 +233,37 @@ class Database:
             cursor = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    def delete_items_by_state(self, state: str) -> int:
+        """Delete all items with given kanban_state. Returns count deleted."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM items WHERE kanban_state = ?", (state,))
+            conn.commit()
+            return cursor.rowcount
+
+    def archive_done_items(self) -> int:
+        """Move all done items to archived. Returns count archived."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE items SET kanban_state = 'archived' WHERE kanban_state = 'done'"
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def count_items_by_state(self) -> dict[str, int]:
+        """Return counts of items per kanban_state."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT kanban_state, COUNT(*) FROM items GROUP BY kanban_state"
+            ).fetchall()
+            return {row[0]: row[1] for row in rows}
+
+    def delete_all_items(self) -> int:
+        """Delete ALL items. Returns count deleted."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM items")
+            conn.commit()
+            return cursor.rowcount
 
     # --- Categories ---
 
@@ -328,6 +370,7 @@ class Database:
         return Item(
             id=row["id"], title=row["title"], content=row["content"],
             raw_input=row["raw_input"], item_type=row["item_type"],
+            kind=row["kind"] or "task",
             url=row["url"], category_id=row["category_id"],
             tags=json.loads(row["tags"]), domain=row["domain"],
             quadrant=row["quadrant"], priority_score=row["priority_score"],
