@@ -117,7 +117,7 @@ async def cmd_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List recent items in table format grouped by category."""
+    """List recent items as clickable buttons grouped by category."""
     items = db.list_items(limit=30)
     if not items:
         await update.message.reply_text("📭 Backlog is empty.")
@@ -143,23 +143,27 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cat = item.ai_suggested_category or "Uncategorized"
         grouped.setdefault(cat, []).append(item)
 
-    lines = ["📋 *Items* (" + str(len(items)) + ")\n"]
+    keyboard = []
     for cat, cat_items in grouped.items():
-        lines.append(f"━━━ *{cat}* ━━━")
+        # Category header as non-clickable button
+        keyboard.append([InlineKeyboardButton(f"━━ {cat} ━━", callback_data="noop")])
         for item in cat_items:
             prio = q_emoji.get(item.quadrant, "❓") if item.quadrant else "❓"
             state = s_emoji.get(item.kanban_state, "")
-            due = ""
-            if item.deadline:
-                due = f" 📅{item.deadline.strftime('%d.%m')}"
-            title = item.title[:40]
-            lines.append(f"{prio} {state} {title}{due}")
-        lines.append("")
+            due = f" 📅{item.deadline.strftime('%d.%m')}" if item.deadline else ""
+            title = item.title[:45]
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{prio}{state} {title}{due}",
+                    callback_data=f"view:{item.id}",
+                )
+            ])
 
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:4000] + "\n... (truncated)"
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(
+        f"📋 *Items* ({len(items)}) — tap to open:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -415,7 +419,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    if data.startswith("domain:"):
+    if data == "noop":
+        return
+
+    elif data.startswith("view:"):
+        item_id = data.split(":")[1]
+        item = db.get_item(item_id)
+        if item:
+            await query.message.reply_text(
+                _format_item_confirmation(item),
+                parse_mode="Markdown",
+                reply_markup=_get_item_actions_keyboard(item_id),
+            )
+        else:
+            await query.answer("Item not found", show_alert=True)
+        return
+
+    elif data.startswith("domain:"):
         parts = data.split(":")
         item_id, domain = parts[1], parts[2]
         item = db.get_item(item_id)
