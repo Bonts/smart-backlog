@@ -101,4 +101,4 @@ def _extract_with_tesseract(image_path: str) -> str:
     from PIL import Image
 
     image = Image.open(image_path)
-    return pytesseract.image_to_string(image)
+    return pytesseract.image_to_string(image, lang="eng+rus")
