@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.language_models import BaseChatModel
 
 from ..config import (
     LLM_PROVIDER,
@@ -14,11 +15,35 @@ from ..config import (
     AZURE_OPENAI_ENDPOINT,
     AZURE_OPENAI_API_DEPLOYMENT,
     AZURE_OPENAI_API_DEPLOYMENT_FAST,
+    GROQ_API_KEY,
+    GROQ_MODEL,
+    GROQ_MODEL_FAST,
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    GEMINI_MODEL_FAST,
 )
 
 
-def get_llm(profile: str = "fast") -> ChatOpenAI | AzureChatOpenAI:
-    """Get configured LLM instance. Supports azure and openai providers."""
+def get_llm(profile: str = "fast") -> BaseChatModel:
+    """Get configured LLM instance. Supports groq, gemini, azure, and openai providers."""
+    if LLM_PROVIDER == "groq" and GROQ_API_KEY:
+        from langchain_groq import ChatGroq
+        model = GROQ_MODEL_FAST if profile == "fast" else GROQ_MODEL
+        return ChatGroq(
+            model=model,
+            api_key=GROQ_API_KEY,
+            temperature=0.3,
+            max_tokens=2000,
+        )
+    if LLM_PROVIDER == "gemini" and GEMINI_API_KEY:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        model = GEMINI_MODEL_FAST if profile == "fast" else GEMINI_MODEL
+        return ChatGoogleGenerativeAI(
+            model=model,
+            google_api_key=GEMINI_API_KEY,
+            temperature=0.3,
+            max_output_tokens=2000,
+        )
     if LLM_PROVIDER == "azure" and AZURE_OPENAI_API_KEY:
         deployment = AZURE_OPENAI_API_DEPLOYMENT_FAST or AZURE_OPENAI_API_DEPLOYMENT
         if profile == "smart":

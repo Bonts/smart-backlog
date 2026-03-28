@@ -17,12 +17,13 @@ async def _extract_with_vision(image_path: str) -> str:
     """Use Vision API to extract and interpret screenshot content."""
     import base64
     from ..config import (
-        LLM_PROVIDER,
+        VISION_PROVIDER,
         OPENAI_API_KEY,
         AZURE_OPENAI_API_KEY,
         AZURE_OPENAI_ENDPOINT,
         AZURE_OPENAI_API_VERSION,
         AZURE_OPENAI_API_DEPLOYMENT,
+        GEMINI_API_KEY,
     )
 
     with open(image_path, "rb") as f:
@@ -50,7 +51,12 @@ async def _extract_with_vision(image_path: str) -> str:
         }
     ]
 
-    if LLM_PROVIDER == "azure" and AZURE_OPENAI_API_KEY:
+    if VISION_PROVIDER == "gemini" and GEMINI_API_KEY:
+        return await _extract_with_gemini(image_path)
+    elif VISION_PROVIDER == "groq":
+        # Groq doesn't support vision — fall back to tesseract
+        return _extract_with_tesseract(image_path)
+    elif VISION_PROVIDER == "azure" and AZURE_OPENAI_API_KEY:
         from openai import AzureOpenAI
         client = AzureOpenAI(
             api_key=AZURE_OPENAI_API_KEY,
@@ -71,6 +77,22 @@ async def _extract_with_vision(image_path: str) -> str:
             max_tokens=1000,
         )
     return response.choices[0].message.content or ""
+
+
+async def _extract_with_gemini(image_path: str) -> str:
+    """Use Gemini Vision to extract text from screenshot."""
+    import google.generativeai as genai
+    from ..config import GEMINI_API_KEY, GEMINI_MODEL
+    from PIL import Image
+
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    image = Image.open(image_path)
+    response = model.generate_content(
+        [image, "Extract all text and describe the key content from this screenshot. "
+                "Format as structured notes with bullet points."],
+    )
+    return response.text or ""
 
 
 def _extract_with_tesseract(image_path: str) -> str:
