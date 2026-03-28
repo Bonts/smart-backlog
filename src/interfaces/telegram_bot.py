@@ -115,14 +115,43 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show Eisenhower priority matrix."""
+    """Show Eisenhower priority matrix with clickable items."""
     items = db.list_items(user_id=_uid(update), limit=100)
     active = [i for i in items if i.kanban_state != KanbanState.ARCHIVED]
     matrix = get_eisenhower_matrix(active)
-    md = matrix_to_markdown(matrix)
-    if len(md) > 4000:
-        md = md[:4000] + "\n\n... (truncated)"
-    await update.message.reply_text(md, parse_mode="Markdown")
+
+    q_labels = {
+        "do_first": "🔴 DO FIRST",
+        "schedule": "🟡 SCHEDULE",
+        "delegate": "🟠 DELEGATE",
+        "eliminate": "⚪ ELIMINATE",
+        "unclassified": "❓ UNCLASSIFIED",
+    }
+    total = sum(len(v) for v in matrix.values())
+    await update.message.reply_text(
+        f"📊 *Eisenhower Matrix* ({total} items)",
+        parse_mode="Markdown",
+    )
+    for quadrant, q_items in matrix.items():
+        if not q_items:
+            continue
+        label = q_labels.get(quadrant, quadrant)
+        keyboard = []
+        for idx, item in enumerate(q_items, 1):
+            state = _S_EMOJI.get(item.kanban_state, "")
+            due = f" 📅{item.deadline.strftime('%d.%m')}" if item.deadline else ""
+            title = item.title[:40]
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{idx}. {state} {title}{due}",
+                    callback_data=f"view:{item.id}",
+                )
+            ])
+        await update.message.reply_text(
+            f"*{label}* ({len(q_items)})",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
 
 _Q_EMOJI = {
@@ -270,10 +299,9 @@ async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show kanban board view."""
+    """Show kanban board view with clickable items."""
     boards = db.list_boards()
     if not boards:
-        # Default: show all items grouped by state
         items = db.list_items(user_id=_uid(update), limit=50)
         grouped: dict[str, list] = {}
         for item in items:
@@ -286,18 +314,32 @@ async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "in_progress": "🔄 In Progress",
             "done": "✅ Done",
         }
-        lines = ["📊 *Kanban Board*\n"]
+        total = sum(len(v) for v in grouped.values())
+        await update.message.reply_text(
+            f"📊 *Kanban Board* ({total} items)",
+            parse_mode="Markdown",
+        )
         for state, label in state_labels.items():
             state_items = grouped.get(state, [])
-            lines.append(f"*{label}* ({len(state_items)})")
-            for item in state_items[:5]:
-                lines.append(f"  • {item.title}")
-            if len(state_items) > 5:
-                lines.append(f"  _... and {len(state_items) - 5} more_")
-            lines.append("")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            if not state_items:
+                continue
+            keyboard = []
+            for idx, item in enumerate(state_items, 1):
+                prio = _Q_EMOJI.get(item.quadrant, "❓") if item.quadrant else "❓"
+                due = f" 📅{item.deadline.strftime('%d.%m')}" if item.deadline else ""
+                title = item.title[:40]
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{idx}. {prio} {title}{due}",
+                        callback_data=f"view:{item.id}",
+                    )
+                ])
+            await update.message.reply_text(
+                f"*{label}* ({len(state_items)})",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
     else:
-        # Show board selection
         keyboard = [
             [InlineKeyboardButton(b.name, callback_data=f"board:{b.id}")]
             for b in boards
