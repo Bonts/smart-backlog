@@ -36,11 +36,11 @@ async def _transcribe_via_gemini(file_path: str) -> str:
     import subprocess
     import tempfile
     import os
-    import google.generativeai as genai
+    from google import genai
     from ..config import GEMINI_API_KEY, GEMINI_MODEL
 
     logger = logging.getLogger(__name__)
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     # Convert OGG to WAV if needed
     wav_path = None
@@ -57,10 +57,10 @@ async def _transcribe_via_gemini(file_path: str) -> str:
         audio_file = file_path
 
     try:
-        uploaded = genai.upload_file(audio_file)
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
-            [uploaded, "Transcribe this audio exactly as spoken. Return ONLY the transcription text."],
+        uploaded = client.files.upload(file=audio_file)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[uploaded, "Transcribe this audio exactly as spoken. Return ONLY the transcription text."],
         )
         text = response.text or ""
         logger.info(f"Gemini transcription: {text[:200]}")

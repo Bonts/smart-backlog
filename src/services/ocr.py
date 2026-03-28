@@ -81,16 +81,19 @@ async def _extract_with_vision(image_path: str) -> str:
 
 async def _extract_with_gemini(image_path: str) -> str:
     """Use Gemini Vision to extract text from screenshot."""
-    import google.generativeai as genai
+    from google import genai
     from ..config import GEMINI_API_KEY, GEMINI_MODEL
     from PIL import Image
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    client = genai.Client(api_key=GEMINI_API_KEY)
     image = Image.open(image_path)
-    response = model.generate_content(
-        [image, "Extract all text and describe the key content from this screenshot. "
-                "Format as structured notes with bullet points."],
+    response = await client.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            "Extract all text and describe the key content from this screenshot. "
+            "Format as structured notes with bullet points.",
+            image,
+        ],
     )
     return response.text or ""
 
