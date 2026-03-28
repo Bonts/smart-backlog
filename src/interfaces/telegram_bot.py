@@ -76,7 +76,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/plan — Today's daily plan\n"
         "/matrix — Eisenhower priority matrix\n"
         "/board — View kanban board\n"
-        "/list — List recent items\n"
+        "/tasks — List tasks\n"
+        "/notes — List notes\n"
+        "/list — List all items\n"
         "/upcoming — Items by period (1-7 days)\n"
         "/export — Export backlog as PDF\n"
         "/cleanup — Bulk archive/delete items\n"
@@ -116,13 +118,8 @@ async def cmd_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(md, parse_mode="Markdown")
 
 
-async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List recent items as clickable buttons grouped by category."""
-    items = db.list_items(limit=30)
-    if not items:
-        await update.message.reply_text("📭 Backlog is empty.")
-        return
-
+def _build_item_keyboard(items: list) -> InlineKeyboardMarkup:
+    """Build inline keyboard with items grouped by category."""
     q_emoji = {
         EisenhowerQuadrant.DO_FIRST: "🔴",
         EisenhowerQuadrant.SCHEDULE: "🟡",
@@ -137,7 +134,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         KanbanState.ARCHIVED: "📦",
     }
 
-    # Group by category
     grouped: dict[str, list] = {}
     for item in items:
         cat = item.ai_suggested_category or "Uncategorized"
@@ -145,8 +141,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = []
     for cat, cat_items in grouped.items():
-        # Category header as non-clickable button
-        keyboard.append([InlineKeyboardButton(f"━━ {cat} ━━", callback_data="noop")])
+        keyboard.append([InlineKeyboardButton(f"▸ {cat}", callback_data="noop")])
         for item in cat_items:
             prio = q_emoji.get(item.quadrant, "❓") if item.quadrant else "❓"
             state = s_emoji.get(item.kanban_state, "")
@@ -154,15 +149,52 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title = item.title[:45]
             keyboard.append([
                 InlineKeyboardButton(
-                    f"{prio}{state} {title}{due}",
+                    f"  {prio}{state} {title}{due}",
                     callback_data=f"view:{item.id}",
                 )
             ])
 
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List tasks (kind=task) as clickable buttons."""
+    items = db.list_items(limit=50)
+    tasks = [i for i in items if i.kind == ItemKind.TASK]
+    if not tasks:
+        await update.message.reply_text("📭 No tasks found.")
+        return
     await update.message.reply_text(
-        f"📋 *Items* ({len(items)}) — tap to open:",
+        f"📋 *Tasks* ({len(tasks)}) — tap to open:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=_build_item_keyboard(tasks),
+    )
+
+
+async def cmd_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List notes (kind=note) as clickable buttons."""
+    items = db.list_items(limit=50)
+    notes = [i for i in items if i.kind == ItemKind.NOTE]
+    if not notes:
+        await update.message.reply_text("📭 No notes found.")
+        return
+    await update.message.reply_text(
+        f"📝 *Notes* ({len(notes)}) — tap to open:",
+        parse_mode="Markdown",
+        reply_markup=_build_item_keyboard(notes),
+    )
+
+
+async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all recent items as clickable buttons grouped by category."""
+    items = db.list_items(limit=30)
+    if not items:
+        await update.message.reply_text("📭 Backlog is empty.")
+        return
+    await update.message.reply_text(
+        f"📋 *All items* ({len(items)}) — tap to open:",
+        parse_mode="Markdown",
+        reply_markup=_build_item_keyboard(items),
     )
 
 
@@ -988,7 +1020,9 @@ def run_bot():
             ("plan", "Today's daily plan"),
             ("matrix", "Eisenhower priority matrix"),
             ("board", "View kanban board"),
-            ("list", "List recent items"),
+            ("tasks", "List tasks"),
+            ("notes", "List notes"),
+            ("list", "List all items"),
             ("upcoming", "Upcoming items by period"),
             ("export", "Export backlog as PDF"),
             ("cleanup", "Bulk archive/delete items"),
@@ -1012,6 +1046,8 @@ def run_bot():
     app.add_handler(CommandHandler("plan", cmd_plan, filters=user_filter))
     app.add_handler(CommandHandler("matrix", cmd_matrix, filters=user_filter))
     app.add_handler(CommandHandler("list", cmd_list, filters=user_filter))
+    app.add_handler(CommandHandler("tasks", cmd_tasks, filters=user_filter))
+    app.add_handler(CommandHandler("notes", cmd_notes, filters=user_filter))
     app.add_handler(CommandHandler("delete", cmd_delete, filters=user_filter))
     app.add_handler(CommandHandler("cleanup", cmd_cleanup, filters=user_filter))
     app.add_handler(CommandHandler("upcoming", cmd_upcoming, filters=user_filter))
