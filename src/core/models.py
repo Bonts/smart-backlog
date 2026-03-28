@@ -66,6 +66,7 @@ class Category(BaseModel):
 
 class Item(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: Optional[str] = None  # Telegram user ID for multi-tenant
     title: str
     content: str = ""
     raw_input: str = ""  # Original input before processing
@@ -115,6 +116,7 @@ class Board(BaseModel):
 
 class DailyPlan(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: Optional[str] = None  # Telegram user ID for multi-tenant
     date: str  # YYYY-MM-DD
     items: list[str] = Field(default_factory=list)  # Item IDs
     summary: str = ""

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
+    user_id TEXT,
     title TEXT NOT NULL,
     content TEXT DEFAULT '',
     raw_input TEXT DEFAULT '',
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS boards (
 
 CREATE TABLE IF NOT EXISTS daily_plans (
     id TEXT PRIMARY KEY,
+    user_id TEXT,
     date TEXT NOT NULL,
     items TEXT DEFAULT '[]',
     summary TEXT DEFAULT '',
@@ -86,7 +88,9 @@ CREATE INDEX IF NOT EXISTS idx_items_domain ON items(domain);
 CREATE INDEX IF NOT EXISTS idx_items_quadrant ON items(quadrant);
 CREATE INDEX IF NOT EXISTS idx_items_kanban_state ON items(kanban_state);
 CREATE INDEX IF NOT EXISTS idx_items_board ON items(board_id);
+CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_daily_plans_date ON daily_plans(date);
+CREATE INDEX IF NOT EXISTS idx_daily_plans_user ON daily_plans(user_id);
 """
 
 SYSTEM_TAGS = [
@@ -119,6 +123,12 @@ class Database:
             cols = [r["name"] for r in conn.execute("PRAGMA table_info(items)").fetchall()]
             if "kind" not in cols:
                 conn.execute("ALTER TABLE items ADD COLUMN kind TEXT DEFAULT 'task'")
+            if "user_id" not in cols:
+                conn.execute("ALTER TABLE items ADD COLUMN user_id TEXT")
+            # Migration: add user_id to daily_plans
+            dp_cols = [r["name"] for r in conn.execute("PRAGMA table_info(daily_plans)").fetchall()]
+            if "user_id" not in dp_cols:
+                conn.execute("ALTER TABLE daily_plans ADD COLUMN user_id TEXT")
             # Seed system tags
             for tag_data in SYSTEM_TAGS:
                 conn.execute(
@@ -130,18 +140,32 @@ class Database:
 
     # --- Items ---
 
+    def assign_orphan_items(self, user_id: str) -> int:
+        """Assign all items with no user_id to the given user. Returns count."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE items SET user_id = ? WHERE user_id IS NULL",
+                (user_id,),
+            )
+            conn.execute(
+                "UPDATE daily_plans SET user_id = ? WHERE user_id IS NULL",
+                (user_id,),
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def add_item(self, item: Item) -> Item:
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO items
-                   (id, title, content, raw_input, item_type, kind, url,
+                   (id, user_id, title, content, raw_input, item_type, kind, url,
                     category_id, tags, domain, quadrant, priority_score,
                     deadline, kanban_state, board_id, ai_summary,
                     ai_suggested_category, ai_suggested_tags,
                     ai_suggested_quadrant, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    item.id, item.title, item.content, item.raw_input,
+                    item.id, item.user_id, item.title, item.content, item.raw_input,
                     item.item_type.value, item.kind.value, item.url, item.category_id,
                     json.dumps(item.tags), item.domain.value if item.domain else None,
                     item.quadrant.value if item.quadrant else None,
@@ -165,6 +189,7 @@ class Database:
 
     def list_items(
         self,
+        user_id: Optional[str] = None,
         domain: Optional[str] = None,
         quadrant: Optional[str] = None,
         kanban_state: Optional[str] = None,
@@ -175,6 +200,9 @@ class Database:
     ) -> list[Item]:
         query = "SELECT * FROM items WHERE 1=1"
         params: list = []
+        if user_id:
+            query += " AND user_id = ?"
+            params.append(user_id)
         if domain:
             query += " AND domain = ?"
             params.append(domain)
@@ -234,34 +262,52 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
 
-    def delete_items_by_state(self, state: str) -> int:
+    def delete_items_by_state(self, state: str, user_id: Optional[str] = None) -> int:
         """Delete all items with given kanban_state. Returns count deleted."""
         with self._connect() as conn:
-            cursor = conn.execute("DELETE FROM items WHERE kanban_state = ?", (state,))
+            if user_id:
+                cursor = conn.execute("DELETE FROM items WHERE kanban_state = ? AND user_id = ?", (state, user_id))
+            else:
+                cursor = conn.execute("DELETE FROM items WHERE kanban_state = ?", (state,))
             conn.commit()
             return cursor.rowcount
 
-    def archive_done_items(self) -> int:
+    def archive_done_items(self, user_id: Optional[str] = None) -> int:
         """Move all done items to archived. Returns count archived."""
         with self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE items SET kanban_state = 'archived' WHERE kanban_state = 'done'"
-            )
+            if user_id:
+                cursor = conn.execute(
+                    "UPDATE items SET kanban_state = 'archived' WHERE kanban_state = 'done' AND user_id = ?",
+                    (user_id,),
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE items SET kanban_state = 'archived' WHERE kanban_state = 'done'"
+                )
             conn.commit()
             return cursor.rowcount
 
-    def count_items_by_state(self) -> dict[str, int]:
+    def count_items_by_state(self, user_id: Optional[str] = None) -> dict[str, int]:
         """Return counts of items per kanban_state."""
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT kanban_state, COUNT(*) FROM items GROUP BY kanban_state"
-            ).fetchall()
+            if user_id:
+                rows = conn.execute(
+                    "SELECT kanban_state, COUNT(*) FROM items WHERE user_id = ? GROUP BY kanban_state",
+                    (user_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT kanban_state, COUNT(*) FROM items GROUP BY kanban_state"
+                ).fetchall()
             return {row[0]: row[1] for row in rows}
 
-    def delete_all_items(self) -> int:
+    def delete_all_items(self, user_id: Optional[str] = None) -> int:
         """Delete ALL items. Returns count deleted."""
         with self._connect() as conn:
-            cursor = conn.execute("DELETE FROM items")
+            if user_id:
+                cursor = conn.execute("DELETE FROM items WHERE user_id = ?", (user_id,))
+            else:
+                cursor = conn.execute("DELETE FROM items")
             conn.commit()
             return cursor.rowcount
 
@@ -342,21 +388,26 @@ class Database:
     def save_daily_plan(self, plan: DailyPlan) -> DailyPlan:
         with self._connect() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO daily_plans VALUES (?,?,?,?,?)",
-                (plan.id, plan.date, json.dumps(plan.items),
+                "INSERT OR REPLACE INTO daily_plans VALUES (?,?,?,?,?,?)",
+                (plan.id, plan.user_id, plan.date, json.dumps(plan.items),
                  plan.summary, plan.generated_at.isoformat()),
             )
             conn.commit()
         return plan
 
-    def get_daily_plan(self, date: str) -> Optional[DailyPlan]:
+    def get_daily_plan(self, date: str, user_id: Optional[str] = None) -> Optional[DailyPlan]:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM daily_plans WHERE date = ?", (date,)
-            ).fetchone()
+            if user_id:
+                row = conn.execute(
+                    "SELECT * FROM daily_plans WHERE date = ? AND user_id = ?", (date, user_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM daily_plans WHERE date = ?", (date,)
+                ).fetchone()
             if row:
                 return DailyPlan(
-                    id=row["id"], date=row["date"],
+                    id=row["id"], user_id=row["user_id"], date=row["date"],
                     items=json.loads(row["items"]),
                     summary=row["summary"],
                     generated_at=row["generated_at"],
@@ -368,7 +419,7 @@ class Database:
     @staticmethod
     def _row_to_item(row) -> Item:
         return Item(
-            id=row["id"], title=row["title"], content=row["content"],
+            id=row["id"], user_id=row["user_id"], title=row["title"], content=row["content"],
             raw_input=row["raw_input"], item_type=row["item_type"],
             kind=row["kind"] or "task",
             url=row["url"], category_id=row["category_id"],

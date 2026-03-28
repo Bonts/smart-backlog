@@ -44,6 +44,12 @@ logger = logging.getLogger(__name__)
 db = Database()
 
 
+def _uid(update: Update) -> str:
+    """Extract user ID as string from any update type."""
+    user = update.effective_user
+    return str(user.id) if user else ""
+
+
 def _is_allowed(user_id: int) -> bool:
     """Check if user is allowed (empty list = allow all)."""
     return not ALLOWED_TELEGRAM_USERS or user_id in ALLOWED_TELEGRAM_USERS
@@ -95,9 +101,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate and show daily plan."""
+    uid = _uid(update)
     await update.message.reply_text("⏳ Generating daily plan...")
     try:
-        plan = await generate_daily_plan(db)
+        plan = await generate_daily_plan(db, user_id=uid)
         items = [db.get_item(iid) for iid in plan.items]
         items = [i for i in items if i is not None]
         md = daily_plan_to_markdown(plan, items)
@@ -109,7 +116,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show Eisenhower priority matrix."""
-    items = db.list_items(limit=100)
+    items = db.list_items(user_id=_uid(update), limit=100)
     active = [i for i in items if i.kanban_state != KanbanState.ARCHIVED]
     matrix = get_eisenhower_matrix(active)
     md = matrix_to_markdown(matrix)
@@ -172,7 +179,7 @@ async def _send_grouped_items(message, items: list, header: str):
 
 async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List tasks (kind=task) as clickable buttons."""
-    items = db.list_items(limit=50)
+    items = db.list_items(user_id=_uid(update), limit=50)
     tasks = [i for i in items if i.kind == ItemKind.TASK]
     if not tasks:
         await update.message.reply_text("📭 No tasks found.")
@@ -184,7 +191,7 @@ async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List notes (kind=note) as clickable buttons."""
-    items = db.list_items(limit=50)
+    items = db.list_items(user_id=_uid(update), limit=50)
     notes = [i for i in items if i.kind == ItemKind.NOTE]
     if not notes:
         await update.message.reply_text("📭 No notes found.")
@@ -196,7 +203,7 @@ async def cmd_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all recent items as clickable buttons grouped by category."""
-    items = db.list_items(limit=30)
+    items = db.list_items(user_id=_uid(update), limit=30)
     if not items:
         await update.message.reply_text("📭 Backlog is empty.")
         return
@@ -207,7 +214,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show items with toggle selection for batch delete."""
-    items = db.list_items(limit=30)
+    items = db.list_items(user_id=_uid(update), limit=30)
     if not items:
         await update.message.reply_text("📭 Backlog is empty.")
         return
@@ -225,7 +232,8 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bulk cleanup: archive/delete done items or purge all."""
-    counts = db.count_items_by_state()
+    uid = _uid(update)
+    counts = db.count_items_by_state(user_id=uid)
     total = sum(counts.values())
     done = counts.get("done", 0)
     archived = counts.get("archived", 0)
@@ -266,7 +274,7 @@ async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
     boards = db.list_boards()
     if not boards:
         # Default: show all items grouped by state
-        items = db.list_items(limit=50)
+        items = db.list_items(user_id=_uid(update), limit=50)
         grouped: dict[str, list] = {}
         for item in items:
             state = item.kanban_state.value
@@ -305,7 +313,7 @@ async def cmd_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     days = 1
     sort_by = "priority"
     await update.message.reply_text(
-        _format_upcoming_items(days, sort_by),
+        _format_upcoming_items(days, sort_by, user_id=_uid(update)),
         parse_mode="Markdown",
         reply_markup=_get_upcoming_keyboard(days, sort_by),
     )
@@ -361,9 +369,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("⏳ Processing...")
 
     try:
+        uid = _uid(update)
         items = await process_input(text=text, db=db)
         await status_msg.delete()
         for item in items:
+            item.user_id = uid
             db.add_item(item)
             response = _format_item_confirmation(item)
             keyboard = _get_item_actions_keyboard(item.id)
@@ -396,7 +406,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.unlink(temp_path)
         await status_msg.delete()
 
+        uid = _uid(update)
         for item in items:
+            item.user_id = uid
             db.add_item(item)
             response = _format_item_confirmation(item)
             keyboard = _get_item_actions_keyboard(item.id)
@@ -430,7 +442,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.unlink(temp_path)
         await status_msg.delete()
 
+        uid = _uid(update)
         for item in items:
+            item.user_id = uid
             db.add_item(item)
             response = _format_item_confirmation(item)
             keyboard = _get_item_actions_keyboard(item.id)
@@ -682,7 +696,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 items = await process_input(image_path=retry_info["path"], db=db)
             else:
                 items = []
+            uid = _uid(update)
             for item in items:
+                item.user_id = uid
                 db.add_item(item)
                 response = _format_item_confirmation(item)
                 keyboard = _get_item_actions_keyboard(item.id)
@@ -711,31 +727,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days = int(parts[1])
         sort_by = parts[2] if len(parts) > 2 else "date"
         await query.edit_message_text(
-            _format_upcoming_items(days, sort_by),
+            _format_upcoming_items(days, sort_by, user_id=_uid(update)),
             parse_mode="Markdown",
             reply_markup=_get_upcoming_keyboard(days, sort_by),
         )
 
     elif data.startswith("export:"):
         export_type = data.split(":")[1]
+        uid = _uid(update)
         await query.edit_message_text("⏳ Generating PDF...")
         try:
             if export_type == "matrix":
-                items = db.list_items(limit=200)
+                items = db.list_items(user_id=uid, limit=200)
                 pdf_bytes = generate_matrix_pdf(items)
                 filename = "eisenhower_matrix.pdf"
                 caption = "📊 Eisenhower Matrix"
             else:
                 if export_type == "tasks":
-                    all_items = db.list_items(limit=200)
+                    all_items = db.list_items(user_id=uid, limit=200)
                     items = [i for i in all_items if i.kind.value == "task"]
                     title = "Tasks"
                 elif export_type == "notes":
-                    all_items = db.list_items(limit=200)
+                    all_items = db.list_items(user_id=uid, limit=200)
                     items = [i for i in all_items if i.kind.value in ("note", "idea")]
                     title = "Notes & Ideas"
                 else:
-                    items = db.list_items(limit=200)
+                    items = db.list_items(user_id=uid, limit=200)
                     title = "Smart Backlog"
                 pdf_bytes = generate_backlog_pdf(items, title)
                 filename = f"{title.lower().replace(' ', '_')}.pdf"
@@ -753,14 +770,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("cleanup:"):
         action = data.split(":")[1]
+        uid = _uid(update)
         if action == "archive_done":
-            count = db.archive_done_items()
+            count = db.archive_done_items(user_id=uid)
             await query.edit_message_text(f"📦 Archived {count} done items.")
         elif action == "delete_done":
-            count = db.delete_items_by_state("done")
+            count = db.delete_items_by_state("done", user_id=uid)
             await query.edit_message_text(f"🗑 Deleted {count} done items.")
         elif action == "delete_archived":
-            count = db.delete_items_by_state("archived")
+            count = db.delete_items_by_state("archived", user_id=uid)
             await query.edit_message_text(f"🗑 Deleted {count} archived items.")
         elif action == "delete_all":
             keyboard = [[
@@ -773,7 +791,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         elif action == "confirm_all":
-            count = db.delete_all_items()
+            count = db.delete_all_items(user_id=uid)
             await query.edit_message_text(f"🗑 Deleted ALL {count} items.")
         elif action == "cancel":
             await query.edit_message_text("Cancelled.")
@@ -955,10 +973,10 @@ def _get_upcoming_keyboard(active_days: int, active_sort: str) -> InlineKeyboard
     return InlineKeyboardMarkup([day_buttons, sort_buttons])
 
 
-def _format_upcoming_items(days: int, sort_by: str) -> str:
+def _format_upcoming_items(days: int, sort_by: str, user_id: str = "") -> str:
     """Format items list filtered by period with sorting."""
     cutoff = datetime.now() - timedelta(days=days)
-    items = db.list_items(limit=100)
+    items = db.list_items(user_id=user_id, limit=100)
     active = [
         i for i in items
         if i.kanban_state not in (KanbanState.DONE, KanbanState.ARCHIVED)
@@ -1017,6 +1035,11 @@ def run_bot():
         return
 
     db.init_db()
+    # Migrate existing items to first allowed user
+    if ALLOWED_TELEGRAM_USERS:
+        count = db.assign_orphan_items(str(ALLOWED_TELEGRAM_USERS[0]))
+        if count:
+            print(f"📦 Migrated {count} orphan items to user {ALLOWED_TELEGRAM_USERS[0]}")
     print("🧠 Smart Backlog bot starting...")
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()

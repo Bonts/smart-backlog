@@ -10,19 +10,19 @@ from ..services.llm import DAILY_PLAN_PROMPT, get_llm
 from ..storage.database import Database
 
 
-async def generate_daily_plan(db: Database) -> DailyPlan:
+async def generate_daily_plan(db: Database, user_id: str = "") -> DailyPlan:
     """Generate a focused daily plan from the backlog."""
     today = date.today().isoformat()
 
     # Get active items (not done/archived)
-    items = db.list_items(limit=100)
+    items = db.list_items(user_id=user_id, limit=100)
     active_items = [
         i for i in items
         if i.kanban_state not in (KanbanState.DONE, KanbanState.ARCHIVED)
     ]
 
     if not active_items:
-        return DailyPlan(date=today, summary="No active items in backlog.")
+        return DailyPlan(date=today, user_id=user_id, summary="No active items in backlog.")
 
     # Format items for LLM
     items_text = "\n".join(
@@ -39,12 +39,14 @@ async def generate_daily_plan(db: Database) -> DailyPlan:
         result = json.loads(response.content)
         plan = DailyPlan(
             date=today,
+            user_id=user_id,
             items=result.get("selected_item_ids", []),
             summary=result.get("summary", ""),
         )
     except (json.JSONDecodeError, AttributeError):
         plan = DailyPlan(
             date=today,
+            user_id=user_id,
             items=[i.id for i in active_items[:5]],
             summary="Auto-selected top 5 items.",
         )
