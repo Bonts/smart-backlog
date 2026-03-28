@@ -118,43 +118,56 @@ async def cmd_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(md, parse_mode="Markdown")
 
 
-def _build_item_keyboard(items: list) -> InlineKeyboardMarkup:
-    """Build inline keyboard with items grouped by category."""
-    q_emoji = {
-        EisenhowerQuadrant.DO_FIRST: "🔴",
-        EisenhowerQuadrant.SCHEDULE: "🟡",
-        EisenhowerQuadrant.DELEGATE: "🟠",
-        EisenhowerQuadrant.ELIMINATE: "⚪",
-    }
-    s_emoji = {
-        KanbanState.BACKLOG: "📥",
-        KanbanState.TODO: "📋",
-        KanbanState.IN_PROGRESS: "🔄",
-        KanbanState.DONE: "✅",
-        KanbanState.ARCHIVED: "📦",
-    }
+_Q_EMOJI = {
+    EisenhowerQuadrant.DO_FIRST: "🔴",
+    EisenhowerQuadrant.SCHEDULE: "🟡",
+    EisenhowerQuadrant.DELEGATE: "🟠",
+    EisenhowerQuadrant.ELIMINATE: "⚪",
+}
+_S_EMOJI = {
+    KanbanState.BACKLOG: "📥",
+    KanbanState.TODO: "📋",
+    KanbanState.IN_PROGRESS: "🔄",
+    KanbanState.DONE: "✅",
+    KanbanState.ARCHIVED: "📦",
+}
 
+
+def _group_by_category(items: list) -> dict[str, list]:
     grouped: dict[str, list] = {}
     for item in items:
         cat = item.ai_suggested_category or "Uncategorized"
         grouped.setdefault(cat, []).append(item)
+    return grouped
 
+
+def _item_keyboard(cat_items: list) -> InlineKeyboardMarkup:
+    """Build inline keyboard for a single category's items."""
     keyboard = []
-    for cat, cat_items in grouped.items():
-        keyboard.append([InlineKeyboardButton(f"▸ {cat}", callback_data="noop")])
-        for item in cat_items:
-            prio = q_emoji.get(item.quadrant, "❓") if item.quadrant else "❓"
-            state = s_emoji.get(item.kanban_state, "")
-            due = f" 📅{item.deadline.strftime('%d.%m')}" if item.deadline else ""
-            title = item.title[:45]
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"  {prio}{state} {title}{due}",
-                    callback_data=f"view:{item.id}",
-                )
-            ])
-
+    for item in cat_items:
+        prio = _Q_EMOJI.get(item.quadrant, "❓") if item.quadrant else "❓"
+        state = _S_EMOJI.get(item.kanban_state, "")
+        due = f" 📅{item.deadline.strftime('%d.%m')}" if item.deadline else ""
+        title = item.title[:45]
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{prio}{state} {title}{due}",
+                callback_data=f"view:{item.id}",
+            )
+        ])
     return InlineKeyboardMarkup(keyboard)
+
+
+async def _send_grouped_items(message, items: list, header: str):
+    """Send items grouped by category — each group as a separate message."""
+    grouped = _group_by_category(items)
+    await message.reply_text(header, parse_mode="Markdown")
+    for cat, cat_items in grouped.items():
+        await message.reply_text(
+            f"📂 *{cat}*",
+            parse_mode="Markdown",
+            reply_markup=_item_keyboard(cat_items),
+        )
 
 
 async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,10 +177,8 @@ async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not tasks:
         await update.message.reply_text("📭 No tasks found.")
         return
-    await update.message.reply_text(
-        f"📋 *Tasks* ({len(tasks)}) — tap to open:",
-        parse_mode="Markdown",
-        reply_markup=_build_item_keyboard(tasks),
+    await _send_grouped_items(
+        update.message, tasks, f"📋 *Tasks* ({len(tasks)})"
     )
 
 
@@ -178,10 +189,8 @@ async def cmd_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not notes:
         await update.message.reply_text("📭 No notes found.")
         return
-    await update.message.reply_text(
-        f"📝 *Notes* ({len(notes)}) — tap to open:",
-        parse_mode="Markdown",
-        reply_markup=_build_item_keyboard(notes),
+    await _send_grouped_items(
+        update.message, notes, f"📝 *Notes* ({len(notes)})"
     )
 
 
@@ -191,10 +200,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not items:
         await update.message.reply_text("📭 Backlog is empty.")
         return
-    await update.message.reply_text(
-        f"📋 *All items* ({len(items)}) — tap to open:",
-        parse_mode="Markdown",
-        reply_markup=_build_item_keyboard(items),
+    await _send_grouped_items(
+        update.message, items, f"📋 *All items* ({len(items)})"
     )
 
 
