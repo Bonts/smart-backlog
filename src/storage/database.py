@@ -88,9 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_items_domain ON items(domain);
 CREATE INDEX IF NOT EXISTS idx_items_quadrant ON items(quadrant);
 CREATE INDEX IF NOT EXISTS idx_items_kanban_state ON items(kanban_state);
 CREATE INDEX IF NOT EXISTS idx_items_board ON items(board_id);
-CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_daily_plans_date ON daily_plans(date);
-CREATE INDEX IF NOT EXISTS idx_daily_plans_user ON daily_plans(user_id);
 """
 
 SYSTEM_TAGS = [
@@ -129,6 +127,9 @@ class Database:
             dp_cols = [r["name"] for r in conn.execute("PRAGMA table_info(daily_plans)").fetchall()]
             if "user_id" not in dp_cols:
                 conn.execute("ALTER TABLE daily_plans ADD COLUMN user_id TEXT")
+            # Create user_id indexes (after migration ensures columns exist)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_plans_user ON daily_plans(user_id)")
             # Seed system tags
             for tag_data in SYSTEM_TAGS:
                 conn.execute(
