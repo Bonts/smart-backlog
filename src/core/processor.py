@@ -61,11 +61,37 @@ async def _process_url(url: str) -> Item:
 
 async def _process_image(image_path: str) -> Item:
     """Process a screenshot — OCR and interpret."""
+    import json as _json
     from ..services.ocr import extract_text_from_image
     text = await extract_text_from_image(image_path)
+
+    # Try to parse structured JSON from vision model
+    try:
+        # Strip markdown code fences if present
+        clean = text.strip()
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        data = _json.loads(clean)
+        content_type = data.get("type", "other")
+
+        if content_type == "book":
+            title_parts = [f"[Book] {data.get('title', 'Unknown')}"]
+            if data.get("author"):
+                title_parts[0] += f". {data['author']}"
+            if data.get("original_title"):
+                title_parts.append(data["original_title"])
+            title = "\n".join(title_parts)
+            content = title
+        else:
+            title = data.get("title", text[:100]) or "Screenshot"
+            content = data.get("content", text)
+    except (_json.JSONDecodeError, AttributeError):
+        title = text[:100] if text else "Screenshot"
+        content = text
+
     return Item(
-        title=text[:100] if text else "Screenshot",
-        content=text,
+        title=title,
+        content=content,
         raw_input=f"[screenshot: {image_path}]",
         item_type=ItemType.SCREENSHOT,
     )

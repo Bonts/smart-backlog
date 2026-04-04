@@ -961,38 +961,41 @@ def _escape_md(text: str) -> str:
 
 def _format_item_confirmation(item: Item) -> str:
     """Format item as a Telegram-friendly confirmation message."""
-    kind_labels = {"task": "📌 Task", "note": "📝 Note", "idea": "💡 Idea"}
-    kind_label = kind_labels.get(item.kind.value, "📌 Task")
+    kind_labels = {"task": "📌", "note": "📝", "idea": "💡"}
+    kind_icon = kind_labels.get(item.kind.value, "📌")
     title = _escape_md(item.title)
-    lines = [f"{kind_label} — *{title}*"]
+    lines = [f"{kind_icon} *{title}*"]
     if item.url:
         lines.append(f"🔗 {item.url}")
+    # Domain — icon only
     if item.domain:
-        domain_emoji = {"work": "💼", "personal": "🏠", "study": "📚"}
-        lines.append(f"{domain_emoji.get(item.domain.value, '')} {item.domain.value}")
+        domain_icons = {"work": "💼", "personal": "🏠", "study": "📚"}
+        lines.append(domain_icons.get(item.domain.value, ""))
+    # Priority — icon only
     if item.quadrant:
-        q_labels = {
-            "do_first": "🔴 Do First",
-            "schedule": "🟡 Schedule",
-            "delegate": "🟠 Delegate",
-            "eliminate": "⚪ Eliminate",
+        q_icons = {
+            "do_first": "🔴",
+            "schedule": "🟡",
+            "delegate": "🟠",
+            "eliminate": "⚪",
         }
-        lines.append(f"Priority: {q_labels.get(item.quadrant.value, item.quadrant.value)}")
-    state_labels = {
-        "backlog": "📥 Backlog",
-        "todo": "📋 To Do",
-        "in_progress": "🔄 In Progress",
-        "done": "✅ Done",
-        "archived": "📦 Archived",
+        lines.append(q_icons.get(item.quadrant.value, ""))
+    # Status — icon only
+    state_icons = {
+        "backlog": "📥",
+        "todo": "📋",
+        "in_progress": "🔄",
+        "done": "✅",
+        "archived": "📦",
     }
-    lines.append(f"Status: {state_labels.get(item.kanban_state.value, item.kanban_state.value)}")
+    lines.append(state_icons.get(item.kanban_state.value, ""))
     if item.deadline:
-        lines.append(f"📅 Due: {item.deadline.strftime('%d.%m.%Y')}")
+        lines.append(f"📅 {item.deadline.strftime('%d.%m.%Y')}")
     if item.ai_summary:
         summary = _escape_md(item.ai_summary)
         lines.append(f"\n_{summary}_")
     if item.ai_suggested_tags:
-        lines.append(f"Tags: {', '.join(item.ai_suggested_tags)}")
+        lines.append(f"\n🏷 {', '.join(item.ai_suggested_tags)}")
     return "\n".join(lines)
 
 

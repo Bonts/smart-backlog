@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from ..config import OCR_ENGINE
 
+_VISION_PROMPT = """Analyze this image and respond ONLY with valid JSON (no markdown, no code fences).
+Identify the content type and extract key information.
+
+Rules:
+- If it's a BOOK cover/photo: {"type": "book", "title": "Book Title", "author": "Author Name", "original_title": "Original title if translated, otherwise empty"}
+- If it's a SCREENSHOT of text/app: {"type": "screenshot", "title": "Brief description (max 10 words)", "content": "extracted text"}
+- If it's an ARTICLE/webpage: {"type": "article", "title": "Article title", "content": "key points"}
+- Otherwise: {"type": "other", "title": "Brief description", "content": "what you see"}
+
+Respond ONLY with the JSON object."""
+
 
 async def extract_text_from_image(image_path: str) -> str:
     """Extract text from screenshot using configured OCR engine."""
@@ -40,8 +51,7 @@ async def _extract_with_vision(image_path: str) -> str:
             "content": [
                 {
                     "type": "text",
-                    "text": "Extract all text and describe the key content from this screenshot. "
-                            "Format as structured notes with bullet points.",
+                    "text": _VISION_PROMPT,
                 },
                 {
                     "type": "image_url",
@@ -89,11 +99,7 @@ async def _extract_with_gemini(image_path: str) -> str:
     image = Image.open(image_path)
     response = await client.aio.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[
-            "Extract all text and describe the key content from this screenshot. "
-            "Format as structured notes with bullet points.",
-            image,
-        ],
+        contents=[_VISION_PROMPT, image],
     )
     return response.text or ""
 
