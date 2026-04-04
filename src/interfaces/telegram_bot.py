@@ -473,6 +473,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo messages — OCR and interpret."""
     status_msg = await update.message.reply_text("📸 Analyzing screenshot...")
+    temp_path = None
 
     try:
         photo = await update.message.photo[-1].get_file()
@@ -481,7 +482,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             temp_path = f.name
 
         items = await process_input(image_path=temp_path, db=db)
-        os.unlink(temp_path)
         await status_msg.delete()
 
         uid = _uid(update)
@@ -490,19 +490,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.add_item(item)
             response = _format_item_confirmation(item)
             keyboard = _get_item_actions_keyboard(item.id)
-            await update.message.reply_text(
-                response,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
+            await _safe_reply(update.message, response, reply_markup=keyboard)
+
+        # Clean up temp file only after successful processing and sending
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
     except Exception as e:
         logger.error(f"Photo processing failed: {e}")
-        # Keep temp file for retry
-        context.user_data["retry"] = {"type": "photo", "path": temp_path}
-        keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data="retry")]]
+        if temp_path:
+            context.user_data["retry"] = {"type": "photo", "path": temp_path}
+            keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data="retry")]]
+        else:
+            keyboard = None
         await update.message.reply_text(
             f"❌ Error processing screenshot: {e}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
         )
 
 
@@ -744,11 +749,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.add_item(item)
                 response = _format_item_confirmation(item)
                 keyboard = _get_item_actions_keyboard(item.id)
-                await query.message.reply_text(
-                    response,
-                    parse_mode="Markdown",
-                    reply_markup=keyboard,
-                )
+                await _safe_reply(query.message, response, reply_markup=keyboard)
             # Clean up temp files on success
             if retry_info["type"] in ("voice", "photo"):
                 try:
@@ -943,11 +944,27 @@ def _build_select_delete_keyboard(items: list[Item], selected: set) -> InlineKey
     return InlineKeyboardMarkup(rows)
 
 
+async def _safe_reply(message, text: str, reply_markup=None):
+    """Send message with Markdown, fall back to plain text on parse errors."""
+    try:
+        await message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    except Exception:
+        await message.reply_text(text, reply_markup=reply_markup)
+
+
+def _escape_md(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in user/AI text."""
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
 def _format_item_confirmation(item: Item) -> str:
     """Format item as a Telegram-friendly confirmation message."""
     kind_labels = {"task": "📌 Task", "note": "📝 Note", "idea": "💡 Idea"}
     kind_label = kind_labels.get(item.kind.value, "📌 Task")
-    lines = [f"{kind_label} — *{item.title}*"]
+    title = _escape_md(item.title)
+    lines = [f"{kind_label} — *{title}*"]
     if item.url:
         lines.append(f"🔗 {item.url}")
     if item.domain:
@@ -972,7 +989,8 @@ def _format_item_confirmation(item: Item) -> str:
     if item.deadline:
         lines.append(f"📅 Due: {item.deadline.strftime('%d.%m.%Y')}")
     if item.ai_summary:
-        lines.append(f"\n_{item.ai_summary}_")
+        summary = _escape_md(item.ai_summary)
+        lines.append(f"\n_{summary}_")
     if item.ai_suggested_tags:
         lines.append(f"Tags: {', '.join(item.ai_suggested_tags)}")
     return "\n".join(lines)
