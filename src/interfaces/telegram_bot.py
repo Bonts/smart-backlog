@@ -977,6 +977,11 @@ def _format_item_confirmation(item: Item) -> str:
 
     if item.url:
         lines.append(f"🔗 {item.url}")
+    # Book links from content (stored after ---)
+    if item.content and "---" in item.content:
+        _parts = item.content.split("---", 1)
+        if len(_parts) > 1:
+            lines.append(_parts[1].strip())
     # Domain — icon only
     if item.domain:
         domain_icons = {"work": "💼", "personal": "🏠", "study": "📚"}

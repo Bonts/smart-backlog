@@ -85,14 +85,30 @@ async def _process_image(image_path: str) -> Item:
             # Line 1: [Book] Title
             # Line 2: Author (italic in display)
             # Line 3: Original title if available
-            title = data.get("title", "Unknown")
+            book_title = data.get("title", "Unknown")
             author = data.get("author", "")
             original = data.get("original_title", "")
-            # Store structured: prefix|title|author|original
-            title = f"[{prefix}] {title}\n{author}"
+            title = f"[{prefix}] {book_title}\n{author}"
             if original:
                 title += f"\n{original}"
             content = title
+
+            # Search for book links (non-blocking, best-effort)
+            try:
+                from ..services.book_search import search_book_links
+                links = await search_book_links(book_title, author)
+                if links:
+                    link_lines = []
+                    if links.get("read"):
+                        link_lines.append(f"📖 [Read free]({links['read']})")
+                    if links.get("info"):
+                        link_lines.append(f"ℹ️ [Open Library]({links['info']})")
+                    if links.get("buy"):
+                        link_lines.append(f"🛒 [Google Books]({links['buy']})")
+                    if link_lines:
+                        content = title + "\n---\n" + " | ".join(link_lines)
+            except Exception as e:
+                logger.warning(f"Book link search failed: {e}")
         elif content_type == "music":
             name = data.get("title", "Unknown")
             artist = data.get("artist", "")
