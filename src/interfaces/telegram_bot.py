@@ -963,8 +963,18 @@ def _format_item_confirmation(item: Item) -> str:
     """Format item as a Telegram-friendly confirmation message."""
     kind_labels = {"task": "📌", "note": "📝", "idea": "💡"}
     kind_icon = kind_labels.get(item.kind.value, "📌")
-    title = _escape_md(item.title)
-    lines = [f"{kind_icon} *{title}*"]
+
+    # Split title into lines; first line = bold title, rest = italic (author, original, etc.)
+    title_lines = item.title.split("\n")
+    first_line = _escape_md(title_lines[0])
+    # Restore [Tag] prefix — unescape the brackets
+    first_line = first_line.replace("\\[", "[")
+    header = f"{kind_icon} *{first_line}*"
+    lines = [header]
+    for extra_line in title_lines[1:]:
+        if extra_line.strip():
+            lines.append(f"_{_escape_md(extra_line.strip())}_")
+
     if item.url:
         lines.append(f"🔗 {item.url}")
     # Domain — icon only

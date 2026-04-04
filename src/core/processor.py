@@ -74,14 +74,44 @@ async def _process_image(image_path: str) -> Item:
         data = _json.loads(clean)
         content_type = data.get("type", "other")
 
+        _TYPE_LABELS = {
+            "book": "Book", "music": "Music", "movie": "Movie",
+            "web": "Web", "code": "Code", "slide": "Slide",
+            "chat": "Chat", "doc": "Doc",
+        }
+        prefix = _TYPE_LABELS.get(content_type, "")
+
         if content_type == "book":
-            title_parts = [f"[Book] {data.get('title', 'Unknown')}"]
-            if data.get("author"):
-                title_parts[0] += f". {data['author']}"
-            if data.get("original_title"):
-                title_parts.append(data["original_title"])
-            title = "\n".join(title_parts)
+            # Line 1: [Book] Title
+            # Line 2: Author (italic in display)
+            # Line 3: Original title if available
+            title = data.get("title", "Unknown")
+            author = data.get("author", "")
+            original = data.get("original_title", "")
+            # Store structured: prefix|title|author|original
+            title = f"[{prefix}] {title}\n{author}"
+            if original:
+                title += f"\n{original}"
             content = title
+        elif content_type == "music":
+            name = data.get("title", "Unknown")
+            artist = data.get("artist", "")
+            title = f"[{prefix}] {name}"
+            if artist:
+                title += f"\n{artist}"
+            content = title
+        elif content_type == "movie":
+            name = data.get("title", "Unknown")
+            director = data.get("director", "")
+            year = data.get("year", "")
+            title = f"[{prefix}] {name}"
+            extra = ", ".join(filter(None, [director, year]))
+            if extra:
+                title += f"\n{extra}"
+            content = title
+        elif prefix:
+            title = f"[{prefix}] {data.get('title', 'Screenshot')}"
+            content = data.get("content", text)
         else:
             title = data.get("title", text[:100]) or "Screenshot"
             content = data.get("content", text)

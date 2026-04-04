@@ -8,10 +8,15 @@ _VISION_PROMPT = """Analyze this image and respond ONLY with valid JSON (no mark
 Identify the content type and extract key information.
 
 Rules:
-- If it's a BOOK cover/photo: {"type": "book", "title": "Book Title", "author": "Author Name", "original_title": "Original title if translated, otherwise empty"}
-- If it's a SCREENSHOT of text/app: {"type": "screenshot", "title": "Brief description (max 10 words)", "content": "extracted text"}
-- If it's an ARTICLE/webpage: {"type": "article", "title": "Article title", "content": "key points"}
-- Otherwise: {"type": "other", "title": "Brief description", "content": "what you see"}
+- BOOK cover/photo: {"type": "book", "title": "Book Title", "author": "Author Name", "original_title": "Original title if translated, otherwise empty"}
+- MUSIC album/vinyl/playlist: {"type": "music", "title": "Album or Song Title", "artist": "Artist Name"}
+- MOVIE/TV show poster: {"type": "movie", "title": "Movie Title", "director": "Director Name", "year": "Year"}
+- WEBPAGE/article screenshot: {"type": "web", "title": "Page title", "content": "key text content"}
+- CODE screenshot: {"type": "code", "title": "What the code does (max 10 words)", "content": "extracted code"}
+- PRESENTATION/slide: {"type": "slide", "title": "Slide title", "content": "key points"}
+- CHAT/message screenshot: {"type": "chat", "title": "Topic of conversation (max 10 words)", "content": "key messages"}
+- DOCUMENT/PDF: {"type": "doc", "title": "Document title", "content": "key text"}
+- Otherwise: {"type": "other", "title": "Brief description (max 10 words)", "content": "what you see"}
 
 Respond ONLY with the JSON object."""
 
